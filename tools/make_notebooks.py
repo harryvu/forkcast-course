@@ -1242,7 +1242,761 @@ print("after removing:", len(model.features[6]._forward_hooks))
     return notebook(cells)
 
 
-LESSONS = {"lesson00.ipynb": lesson00, "lesson01.ipynb": lesson01, "lesson02.ipynb": lesson02, "lesson03.ipynb": lesson03, "lesson04.ipynb": lesson04, "lesson05.ipynb": lesson05, "lesson06.ipynb": lesson06, "lesson07.ipynb": lesson07, "lesson08.ipynb": lesson08, "lesson09.ipynb": lesson09, "lesson10.ipynb": lesson10}
+def lesson11() -> dict:
+    text_src = (ROOT / "starters/lesson11/forkcast/text.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 11: Text as tensors
+
+Goes with the Lesson 11 page of the Forkcast course. Tokens, a vocabulary, padding and masks, embeddings for words, and a bag-of-embeddings sentiment model, first on the bundled templated reviews, then on real Yelp reviews.
+
+Runtime: CPU is fine for the templated corpus; a GPU makes the Yelp run quick.
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/text.py`\n\nWrite `tokenize`, `Vocab`, `pad_batch`, `collate_reviews` and `BagOfEmbeddings` as the page builds them; the dataset and loader helpers are provided."),
+        code("%%writefile forkcast/text.py\n" + text_src),
+        md("## 3. Tokens and ids"),
+        code('''
+import importlib, torch
+from torch import nn
+import matplotlib.pyplot as plt
+from forkcast import text, train
+from forkcast.model import count_parameters
+importlib.reload(text)
+
+frame = text.load_reviews()
+print(frame.head(3).to_string())
+print(text.tokenize(frame["text"][0]))
+cut = int(0.8 * len(frame)); tr, va = frame.iloc[:cut], frame.iloc[cut:]
+vocab = text.Vocab([text.tokenize(t) for t in tr["text"]], min_freq=1)        # training texts only
+print(len(vocab), vocab.itos[:8])
+ids = vocab.encode(text.tokenize("The pad thai was delicious and the delivery was late. Mixed feelings!"))
+print(ids); print(vocab.decode(ids))
+'''),
+        md("## 4. Padding, masks, loaders"),
+        code('''
+importlib.reload(text)
+train_loader, val_loader = text.make_text_loaders(tr["text"], tr["label"], va["text"], va["label"], vocab, batch_size=32)
+ids, mask, labels = next(iter(train_loader))
+print(ids.shape, mask.shape, labels.shape, ids.dtype, mask.dtype)
+print("real lengths:", mask.sum(dim=1)[:8].tolist())
+print(ids[0]); print(mask[0].int())
+'''),
+        md("## 5. The model, and the mask at work"),
+        code('''
+importlib.reload(text)
+model = text.BagOfEmbeddings(len(vocab), dim=16, hidden=16)
+short = torch.tensor([[5, 6, 7]]); padded = torch.tensor([[5, 6, 7, 0, 0, 0]])
+print("padding changes nothing:", torch.allclose(model(short, short != 0), model(padded, padded != 0)))
+print("pad row:", model.embedding.weight[0])
+
+torch.manual_seed(0)
+model = text.BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+print(count_parameters(model), "parameters")
+h = train.fit_v2(model, train_loader, val_loader, epochs=8, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+print([round(v, 3) for v in h["val"]])
+
+def accuracy_text(m, loader, device="cpu"):
+    m.eval(); correct = total = 0
+    with torch.no_grad():
+        for i_, mk, lb in loader:
+            correct += (m(i_.to(device), mk.to(device)).argmax(1).cpu() == lb).sum().item(); total += len(lb)
+    return correct / total
+print("validation accuracy on templated reviews:", accuracy_text(model, val_loader))
+'''),
+        md("## 6. Real reviews: Yelp polarity\n\n40,000 reviews streamed from the Hugging Face Hub; vocabulary of the 20,000 most frequent tokens from the training part; reviews truncated to 200 tokens."),
+        code('''
+!pip install -q datasets
+from datasets import load_dataset
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+stream = load_dataset("fancyzhx/yelp_polarity", split="train", streaming=True).shuffle(seed=0, buffer_size=10_000)
+texts, labels = [], []
+for ex in stream:
+    texts.append(ex["text"]); labels.append(ex["label"])
+    if len(texts) >= 40_000:
+        break
+n_val = 4_000
+yelp_vocab = text.Vocab([text.tokenize(t) for t in texts[n_val:]], min_freq=2, max_size=20_000)
+print("vocabulary:", len(yelp_vocab))
+y_train, y_val = text.make_text_loaders(texts[n_val:], labels[n_val:], texts[:n_val], labels[:n_val], yelp_vocab, batch_size=128, max_len=200)
+torch.manual_seed(0)
+yelp_model = text.BagOfEmbeddings(len(yelp_vocab), dim=64, hidden=64)
+h = train.fit_v2(yelp_model, y_train, y_val, epochs=5, lr=3e-3, loss_fn=nn.CrossEntropyLoss(), device=device)
+print("Yelp validation accuracy:", round(accuracy_text(yelp_model, y_val, device), 3))
+
+emb = yelp_model.embedding.weight.detach().cpu(); normed = emb / emb.norm(dim=1, keepdim=True).clamp_min(1e-8)
+for w in ["delicious", "rude", "overpriced", "friendly"]:
+    if w in yelp_vocab.stoi:
+        sims = normed @ normed[yelp_vocab.stoi[w]]
+        print(f"nearest to {w!r}:", [yelp_vocab.itos[j] for j in sims.argsort(descending=True)[1:7].tolist()])
+'''),
+        md("### Break it on purpose: drop the mask\n\nA plain mean over T divides by the padded length. Short reviews suffer most."),
+        code('''
+class Unmasked(text.BagOfEmbeddings):
+    def forward(self, ids, mask):
+        return self.head(self.embedding(ids).mean(dim=1))       # zeros included
+
+torch.manual_seed(0)
+bad = Unmasked(len(yelp_vocab), dim=64, hidden=64)
+train.fit_v2(bad, y_train, y_val, epochs=5, lr=3e-3, loss_fn=nn.CrossEntropyLoss(), device=device)
+print("without the mask:", round(accuracy_text(bad, y_val, device), 3), "| with:", round(accuracy_text(yelp_model, y_val, device), 3))
+'''),
+        md("## 7. Definition of done\n\nExpected: `7 passed`, then `83 passed` with no failures for everything so far (skipped tests belong to lessons you have not started)."),
+        code("!pytest tests/test_11.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 8. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 11: text as tensors")),
+    ]
+    return notebook(cells)
+
+
+def lesson12() -> dict:
+    att_src = (ROOT / "starters/lesson12/forkcast/attention.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 12: Attention from scratch to Transformer
+
+Goes with the Lesson 12 page of the Forkcast course. Twin reviews that defeat a bag of words, attention by hand, positional encoding, and a tiny Transformer encoder.
+
+Runtime: CPU is fine; a GPU helps for the Yelp run at the end.
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/attention.py`\n\nThe twin-review generator and loaders are provided. Write `scaled_dot_product`, `PositionalEncoding` and `TinyTransformer` as the page builds them."),
+        code("%%writefile forkcast/attention.py\n" + att_src),
+        md("## 3. The bag's ceiling"),
+        code('''
+import importlib, math, torch
+from torch import nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from forkcast import attention, text, train
+from forkcast.model import count_parameters
+importlib.reload(attention)
+
+texts, labels = attention.make_negation_reviews(6, seed=0)
+for t, l in zip(texts, labels):
+    print(l, t)
+train_loader, val_loader, vocab = attention.negation_loaders()
+print(len(vocab), "tokens")
+
+def accuracy(model, loader, device="cpu"):
+    model.eval(); correct = total = 0
+    with torch.no_grad():
+        for ids, mask, y in loader:
+            correct += (model(ids.to(device), mask.to(device)).argmax(1).cpu() == y).sum().item(); total += len(y)
+    return correct / total
+
+torch.manual_seed(0)
+bag = text.BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+h = train.fit_v2(bag, train_loader, val_loader, epochs=15, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+print("bag: accuracy", accuracy(bag, val_loader), "| validation loss", round(h["val"][-1], 3), "| ln 2 =", round(math.log(2), 3))
+'''),
+        md("## 4. Attention by hand"),
+        code('''
+importlib.reload(attention)
+torch.manual_seed(0)
+q, k, v = torch.randn(2, 5, 8), torch.randn(2, 5, 8), torch.randn(2, 5, 8)
+out, w = attention.scaled_dot_product(q, k, v)
+print(out.shape, w.shape); print(w.sum(dim=-1))
+print("matches PyTorch:", torch.allclose(out, F.scaled_dot_product_attention(q, k, v), atol=1e-5))
+key_mask = torch.tensor([[True, True, True, False, False]])
+_, w = attention.scaled_dot_product(q[:1], k[:1], v[:1], key_mask)
+print("weights on the padded keys:", w[0, :, 3:].abs().max().item())
+'''),
+        md("## 5. Positions"),
+        code('''
+importlib.reload(attention)
+pe = attention.PositionalEncoding(32, max_len=50)
+print(pe.pe.shape, "| trainable parameters:", sum(p.numel() for p in pe.parameters()), "| in state_dict:", "pe" in pe.state_dict())
+plt.figure(figsize=(8, 3)); plt.imshow(pe.pe[0].T, aspect="auto", cmap="RdBu"); plt.xlabel("position"); plt.ylabel("dimension"); plt.colorbar();
+'''),
+        md("## 6. The tiny Transformer"),
+        code('''
+importlib.reload(attention)
+probe = attention.TinyTransformer(vocab_size=50, d_model=16, nhead=2, dropout=0.0).eval()
+ids = torch.tensor([[5, 6, 7, 8]]); swapped = torch.tensor([[5, 8, 7, 6]]); padded = torch.tensor([[5, 6, 7, 8, 0, 0]])
+print("order changes the output:", not torch.allclose(probe(ids, ids != 0), probe(swapped, swapped != 0)))
+print("padding does not:", torch.allclose(probe(ids, ids != 0), probe(padded, padded != 0), atol=1e-5))
+
+torch.manual_seed(0)
+model = attention.TinyTransformer(len(vocab), d_model=32, nhead=2, num_layers=1, dim_feedforward=64)
+print(count_parameters(model), "parameters")
+h = train.fit_v2(model, train_loader, val_loader, epochs=25, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+print("transformer: accuracy", accuracy(model, val_loader), "| validation loss by epoch:", [round(v, 2) for v in h["val"][::5]])
+'''),
+        md("### Look at the attention of one review"),
+        code('''
+model.eval()
+ids, mask, y = next(iter(val_loader))
+i = 0; toks = vocab.decode(ids[i][mask[i]]); n = len(toks)
+with torch.no_grad():
+    x = model.positions(model.embedding(ids[i:i+1, :n]))
+    _, w = attention.scaled_dot_product(x, x, x)
+plt.figure(figsize=(5, 4.5)); plt.imshow(w[0], cmap="Blues"); plt.xticks(range(n), toks, rotation=90); plt.yticks(range(n), toks); plt.title(f"label {y[i].item()}: {' '.join(toks)}", fontsize=9);
+'''),
+        md("### Break it on purpose: no positions"),
+        code('''
+class NoPositions(attention.TinyTransformer):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k); self.positions = nn.Identity()
+
+torch.manual_seed(0)
+blind = NoPositions(len(vocab), d_model=32, nhead=2, num_layers=1, dim_feedforward=64)
+train.fit_v2(blind, train_loader, val_loader, epochs=25, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+print("without positional encoding: accuracy", accuracy(blind, val_loader))
+'''),
+        md("## 7. Real reviews: bag against Transformer on Yelp\n\nReuses Lesson 11's download. Expect a modest gain, not a leap."),
+        code('''
+!pip install -q datasets
+from datasets import load_dataset
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+stream = load_dataset("fancyzhx/yelp_polarity", split="train", streaming=True).shuffle(seed=0, buffer_size=10_000)
+texts, labels = [], []
+for ex in stream:
+    texts.append(ex["text"]); labels.append(ex["label"])
+    if len(texts) >= 40_000:
+        break
+n_val = 4_000
+yelp_vocab = text.Vocab([text.tokenize(t) for t in texts[n_val:]], min_freq=2, max_size=20_000)
+y_train, y_val = text.make_text_loaders(texts[n_val:], labels[n_val:], texts[:n_val], labels[:n_val], yelp_vocab, batch_size=128, max_len=200)
+torch.manual_seed(0)
+bag = text.BagOfEmbeddings(len(yelp_vocab), dim=64, hidden=64)
+train.fit_v2(bag, y_train, y_val, epochs=5, lr=3e-3, loss_fn=nn.CrossEntropyLoss(), device=device)
+torch.manual_seed(0)
+tf = attention.TinyTransformer(len(yelp_vocab), d_model=64, nhead=4, num_layers=2, dim_feedforward=128)
+train.fit_v2(tf, y_train, y_val, epochs=5, lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device)
+print("Yelp validation accuracy: bag", round(accuracy(bag, y_val, device), 3), "| transformer", round(accuracy(tf, y_val, device), 3))
+'''),
+        md("## 8. Definition of done\n\nExpected: `7 passed`, then `90 passed` with no failures for everything so far (skipped tests belong to lessons you have not started)."),
+        code("!pytest tests/test_12.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 9. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 12: attention and a tiny Transformer")),
+    ]
+    return notebook(cells)
+
+
+def lesson13() -> dict:
+    lm_src = (ROOT / "starters/lesson13/forkcast/lm.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 13: Pretrained language models
+
+Goes with the Lesson 13 page of the Forkcast course. Subword tokenizers, a Hugging Face model as an `nn.Module`, gentle fine-tuning with clipping and accumulation, and sentence embeddings for menu search.
+
+Runtime: pick a **GPU**. The toy model runs anywhere; the real DistilBERT fine-tune wants the GPU (about ten minutes on a T4).
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/lm.py`\n\nThe toy tokenizer and toy models are provided. Write `encode_batch`, `ClassificationCollator`, `mean_pool`, `embed_texts`, `search`, `clip_and_step` and `fit_lm` as the page builds them."),
+        code("%%writefile forkcast/lm.py\n" + lm_src),
+        md("## 3. Subword pieces, toy and real"),
+        code('''
+import importlib, math, torch
+from torch import nn
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
+from forkcast import lm, text
+from forkcast.model import count_parameters
+importlib.reload(lm)
+
+frame = text.load_reviews()
+toy_tok = lm.train_wordpiece_tokenizer(frame["text"], vocab_size=600)
+real_tok = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+for name, tok in [("toy", toy_tok), ("real", real_tok)]:
+    enc = lm.encode_batch(tok, ["Overpriced forkcast pizza, soggy fries!", "Cold."], max_length=32)
+    print(name, enc["input_ids"].shape, tok.convert_ids_to_tokens(enc["input_ids"][0].tolist()))
+    print("     mask of the short review:", enc["attention_mask"][1].tolist())
+'''),
+        md("## 4. A model is a module"),
+        code('''
+importlib.reload(lm)
+collate = lm.ClassificationCollator(toy_tok, max_length=32)
+cut = 640
+train_loader = DataLoader(list(zip(frame["text"][:cut], frame["label"][:cut])), batch_size=32, shuffle=True, collate_fn=collate)
+val_loader = DataLoader(list(zip(frame["text"][cut:], frame["label"][cut:])), batch_size=64, collate_fn=collate)
+batch = next(iter(train_loader)); print({k: tuple(v.shape) for k, v in batch.items()})
+torch.manual_seed(0)
+tiny = lm.tiny_distilbert(toy_tok.vocab_size, num_labels=2)
+out = tiny(**batch)
+print(type(tiny).__name__, count_parameters(tiny), "parameters |", out.logits.shape, out.loss)
+'''),
+        md("## 5. Embeddings and search, toy encoder first"),
+        code('''
+importlib.reload(lm)
+menu = ["spicy chicken ramen with soft egg", "margherita pizza with fresh basil", "beef pho with lime and herbs", "green curry with jasmine rice", "crispy fish tacos"]
+enc = lm.tiny_encoder(toy_tok.vocab_size)
+emb = lm.embed_texts(enc, toy_tok, menu)
+print(emb.shape, emb.norm(dim=1))
+print(lm.search("spicy chicken ramen with egg", menu, emb, enc, toy_tok, k=3))
+'''),
+        md("## 6. Fine-tune the toy model with clipping and accumulation"),
+        code('''
+importlib.reload(lm)
+torch.manual_seed(0)
+tiny = lm.tiny_distilbert(toy_tok.vocab_size, num_labels=2)
+h = lm.fit_lm(tiny, train_loader, val_loader, epochs=3, lr=1e-3, accumulation_steps=2)
+print("optimizer steps:", h["steps"], "| batches per epoch:", len(train_loader))
+print("validation accuracy by epoch:", [round(a, 3) for a in h["val_acc"]])
+'''),
+        md("## 7. The real thing: DistilBERT on star ratings\n\n10,000 Yelp reviews with 1 to 5 stars, one epoch at 2e-5. About ten minutes on a T4."),
+        code('''
+!pip install -q datasets
+from datasets import load_dataset
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+stream = load_dataset("fancyzhx/yelp_review_full", split="train", streaming=True).shuffle(seed=0, buffer_size=10_000)
+texts, stars = [], []
+for ex in stream:
+    texts.append(ex["text"]); stars.append(ex["label"])          # 0..4 = one to five stars
+    if len(texts) >= 10_000:
+        break
+real_collate = lm.ClassificationCollator(real_tok, max_length=128)
+r_train = DataLoader(list(zip(texts[1000:], stars[1000:])), batch_size=16, shuffle=True, collate_fn=real_collate)
+r_val = DataLoader(list(zip(texts[:1000], stars[:1000])), batch_size=64, collate_fn=real_collate)
+torch.manual_seed(0)
+bert = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=5)
+print(count_parameters(bert), "parameters")
+h = lm.fit_lm(bert, r_train, r_val, epochs=1, lr=2e-5, accumulation_steps=2, device=device)
+print("star accuracy:", round(h["val_acc"][-1], 3), "(chance 0.20) | optimizer steps:", h["steps"])
+
+bert.eval(); preds = []
+with torch.no_grad():
+    for b in r_val:
+        preds.append(bert(**{k: v.to(device) for k, v in b.items()}).logits.argmax(-1).cpu())
+preds = torch.cat(preds); truth = torch.tensor(stars[:1000])
+print("mean absolute error in stars:", round((preds - truth).abs().float().mean().item(), 2))
+'''),
+        md("## 8. Search the menu by meaning\n\nA sentence-transformers encoder built for embeddings, against plain DistilBERT."),
+        code('''
+menu40 = ["spicy chicken ramen with soft egg", "tonkotsu ramen", "beef pho with lime and herbs", "green curry with jasmine rice", "pad thai with prawns", "margherita pizza with fresh basil", "four cheese lasagna", "spaghetti carbonara", "crispy fish tacos", "classic cheeseburger and fries", "falafel wrap with tahini", "greek salad with feta", "lentil soup", "grilled salmon with asparagus", "mushroom risotto", "chicken tikka masala", "lamb biryani", "vegetable dumplings", "kimchi fried rice", "bibimbap with tofu", "caesar salad", "tomato basil soup", "shrimp pad see ew", "quinoa bowl with roasted vegetables", "fish and chips", "pulled pork sandwich", "eggplant parmigiana", "miso soup with tofu", "chicken shawarma plate", "sushi platter", "poke bowl with tuna", "stuffed peppers", "pepperoni pizza", "beef tacos al pastor", "butter chicken", "udon noodle soup", "caprese sandwich", "mac and cheese", "coconut lentil dal", "chocolate lava cake"]
+mini_tok = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+mini = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device)
+plain = AutoModel.from_pretrained("distilbert-base-uncased").to(device)
+emb_mini = lm.embed_texts(mini, mini_tok, menu40, device)
+emb_plain = lm.embed_texts(plain, real_tok, menu40, device)
+print(emb_mini.shape, emb_plain.shape)
+for q in ["something spicy with noodles", "a light vegetarian lunch", "comfort food for a cold evening"]:
+    print(f"\n{q!r}")
+    print("  MiniLM:    ", [t for t, s in lm.search(q, menu40, emb_mini, mini, mini_tok, k=3, device=device)])
+    print("  DistilBERT:", [t for t, s in lm.search(q, menu40, emb_plain, plain, real_tok, k=3, device=device)])
+'''),
+        md("### Break it on purpose: fine-tune at 1e-3"),
+        code('''
+torch.manual_seed(0)
+reckless = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=5)
+h = lm.fit_lm(reckless, r_train, r_val, epochs=1, lr=1e-3, accumulation_steps=2, device=device)
+print("at lr=1e-3: star accuracy", round(h["val_acc"][-1], 3), "(2e-5 gave far more)")
+'''),
+        md("## 9. Definition of done\n\nExpected: `7 passed`, then `97 passed` with no failures for everything so far (skipped tests belong to lessons you have not started)."),
+        code("!pytest tests/test_13.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 10. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 13: pretrained language models")),
+    ]
+    return notebook(cells)
+
+
+def lesson14() -> dict:
+    rec_src = (ROOT / "starters/lesson14/forkcast/recsys.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 14: Recommendations
+
+Goes with the Lesson 14 page of the Forkcast course. User and restaurant embeddings, negative sampling on implicit feedback, hit rate at k against the popularity baseline, and a check against the hidden tastes that generated the orders.
+
+Runtime: CPU is enough.
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/recsys.py`\n\nThe order generator, split, seen-items index and popularity baseline are provided. Write `MatrixFactorization`, `sample_negatives`, `train_one_epoch_rec`, `hit_rate_at_k` and `nearest_restaurants`."),
+        code("%%writefile forkcast/recsys.py\n" + rec_src),
+        md("## 3. The order history"),
+        code('''
+import importlib, torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from forkcast import recsys
+from forkcast.model import count_parameters
+importlib.reload(recsys)
+
+frame, user_factors, item_factors = recsys.make_order_history()
+train, test = recsys.leave_one_out(frame)
+seen = recsys.seen_items(train)
+print(frame.head()); print(len(train), "training orders,", len(test), "held-out orders")
+print("most ordered restaurants:", train["item"].value_counts().head(3).to_dict())
+print("popularity hit@10:", round(recsys.popularity_hit_rate(train, test, seen, k=10), 3))
+'''),
+        md("## 4. The model"),
+        code('''
+importlib.reload(recsys)
+torch.manual_seed(0)
+model = recsys.MatrixFactorization(recsys.N_USERS, recsys.N_RESTAURANTS, dim=16)
+print(count_parameters(model), "parameters")
+users = torch.tensor([0, 1, 2]); items = torch.tensor([5, 6, 7])
+print("forward agrees with score_all:", torch.allclose(model.score_all(users)[torch.arange(3), items], model(users, items), atol=1e-6))
+print("untrained hit@10:", round(recsys.hit_rate_at_k(model, test, seen, 10), 3))
+'''),
+        md("## 5. Train with sampled negatives"),
+        code('''
+importlib.reload(recsys)
+torch.manual_seed(0)
+model = recsys.MatrixFactorization(recsys.N_USERS, recsys.N_RESTAURANTS, dim=16)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-2, weight_decay=1e-5)
+loader = recsys.make_rec_loader(train)
+losses, hits = [], []
+for epoch in range(12):
+    losses.append(recsys.train_one_epoch_rec(model, loader, optimizer, recsys.N_RESTAURANTS, seen))
+    hits.append(recsys.hit_rate_at_k(model, test, seen, k=10))
+print("loss:", [round(v, 3) for v in losses[::2]]); print("hit@10:", [round(v, 3) for v in hits[::2]])
+fig, ax = plt.subplots(1, 2, figsize=(9, 3)); ax[0].plot(losses); ax[0].set_title("training loss"); ax[1].plot(hits); ax[1].axhline(recsys.popularity_hit_rate(train, test, seen, 10), ls="--", c="k"); ax[1].set_title("hit@10 vs popularity (dashed)");
+'''),
+        md("## 6. Hit rate against k"),
+        code('''
+ks = [1, 3, 5, 10, 20, 30]
+learned = [recsys.hit_rate_at_k(model, test, seen, k) for k in ks]
+popular = [recsys.popularity_hit_rate(train, test, seen, k) for k in ks]
+print({k: (round(l, 3), round(p, 3)) for k, l, p in zip(ks, learned, popular)})
+plt.plot(ks, learned, marker="o", label="learned"); plt.plot(ks, popular, marker="o", label="popularity"); plt.plot(ks, [k / 100 for k in ks], "k:", label="random"); plt.xlabel("k"); plt.ylabel("hit rate"); plt.legend();
+'''),
+        md("## 7. What it learned, against the hidden tastes"),
+        code('''
+importlib.reload(recsys)
+learned_vec = F.normalize(model.item_vec.weight.detach(), dim=1); truth = F.normalize(item_factors, dim=1)
+corr = torch.corrcoef(torch.stack([(learned_vec @ learned_vec.T).flatten(), (truth @ truth.T).flatten()]))[0, 1]
+print("correlation of learned and hidden restaurant similarities:", round(corr.item(), 3))
+print("nearest to restaurant 7 (learned):", recsys.nearest_restaurants(model, 7, k=5))
+print("nearest to restaurant 7 (hidden): ", [int(i) for i in (truth @ truth[7]).topk(6).indices.tolist() if i != 7][:5])
+
+for u in [0, 1, 2]:
+    scores = model.score_all(torch.tensor([u]))
+    scores[0, list(seen[u])] = float("-inf")
+    held = int(test.loc[test["user"] == u, "item"].iloc[0])
+    top = scores.topk(10).indices[0].tolist()
+    print(f"user {u}: top-5 {top[:5]} | held-out {held} | rank {top.index(held) + 1 if held in top else '>10'}")
+'''),
+        md("### Break it on purpose: forget to hide the seen restaurants"),
+        code('''
+@torch.no_grad()
+def hit_rate_no_mask(model, test, k=10):
+    users = torch.tensor(test["user"].values); targets = torch.tensor(test["item"].values)
+    top = model.score_all(users).topk(k, dim=1).indices
+    return (top == targets[:, None]).any(dim=1).float().mean().item()
+print("masked:", round(recsys.hit_rate_at_k(model, test, seen, 10), 3), "| unmasked:", round(hit_rate_no_mask(model, test), 3))
+'''),
+        md("## 8. Definition of done\n\nExpected: `7 passed`, then `104 passed` with no failures for everything so far (skipped tests belong to lessons you have not started)."),
+        code("!pytest tests/test_14.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 9. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 14: recommendations")),
+    ]
+    return notebook(cells)
+
+
+def lesson15() -> dict:
+    serve_src = (ROOT / "starters/lesson15/forkcast/serve.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 15: Serving
+
+Goes with the Lesson 15 page of the Forkcast course. An artifact that holds everything inference needs, an inference path that matches training, `torch.export`, FastAPI endpoints tested in-process, latency measurement, and the real server.
+
+Runtime: CPU is enough.
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP.rstrip("\n") + "\n!pip install -q fastapi httpx uvicorn\n"),
+        md("## 2. `forkcast/serve.py`\n\nThe pydantic request models are provided. Write `EtaPredictor.features/predict/save/load`, `export_program`, `load_exported`, `latency_stats` and the three endpoint bodies as the page builds them."),
+        code("%%writefile forkcast/serve.py\n" + serve_src),
+        md("## 3. A trained ETA model, and the inference path"),
+        code('''
+import importlib, os, torch
+from torch import nn
+from fastapi.testclient import TestClient
+from forkcast import serve, trips, train, text, vision
+from forkcast.model import TabularNet
+from forkcast.preprocess import Normalizer
+importlib.reload(serve)
+
+frame = trips.load_trips(verbose=False)
+tr, va, _ = trips.split_frame(frame, seed=0)
+norm = Normalizer().fit(torch.tensor(tr[trips.CONTINUOUS].values, dtype=torch.float32))
+tl, vl = trips.make_loaders(tr, va, norm, batch_size=256)
+torch.manual_seed(0)
+model = TabularNet(4, hidden=(32, 32))
+train.fit_loader(model, tl, vl, epochs=5, lr=3e-3)
+eta = serve.EtaPredictor(model, norm, hidden=(32, 32))
+orders = tr.head(8)[trips.CONTINUOUS + trips.CATEGORICAL].astype({"pickup_hour": int, "weekday": int, "passenger_count": int}).to_dict(orient="records")
+print(orders[0])
+print("batched:", [round(v, 2) for v in eta.predict(orders[:3])], "| single:", [round(eta.predict([o])[0], 2) for o in orders[:3]])
+'''),
+        md("## 4. The artifact"),
+        code('''
+importlib.reload(serve)
+os.makedirs("artifacts", exist_ok=True)
+eta = serve.EtaPredictor(model, norm, hidden=(32, 32))
+eta.save("artifacts/eta.pt")
+print("artifact:", round(os.path.getsize("artifacts/eta.pt") / 1024, 1), "kB; keys", sorted(torch.load("artifacts/eta.pt", weights_only=True)))
+loaded = serve.EtaPredictor.load("artifacts/eta.pt")
+print("same answers after reload:", torch.allclose(torch.tensor(loaded.predict(orders)), torch.tensor(eta.predict(orders)), atol=1e-5))
+'''),
+        md("## 5. Export"),
+        code('''
+importlib.reload(serve)
+cont, cat = eta.features(orders)
+serve.export_program(eta.model, (cont[:4], cat[:4]), "artifacts/eta.pt2")
+exported = serve.load_exported("artifacts/eta.pt2")
+with torch.inference_mode():
+    for n in (1, 3, 8):
+        print(f"batch {n}: max difference", (exported(cont[:n], cat[:n]) - eta.model(cont[:n], cat[:n])).abs().max().item())
+'''),
+        md("## 6. The API, tested in-process\n\nA sentiment model from Lesson 11 and a shape classifier from Lesson 7 stand in for the real dish model; the capstone swaps in Lesson 9's ResNet."),
+        code('''
+importlib.reload(serve)
+reviews = text.load_reviews()
+vocab = text.Vocab([text.tokenize(t) for t in reviews["text"]])
+r_tl, r_vl = text.make_text_loaders(reviews["text"][:640], reviews["label"][:640], reviews["text"][640:], reviews["label"][640:], vocab, batch_size=32)
+torch.manual_seed(0); bag = text.BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+train.fit_v2(bag, r_tl, r_vl, epochs=6, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+s_tl, s_vl = vision.shape_loaders(640, 128)
+torch.manual_seed(0); cnn = vision.SmallCNN()
+train.fit_v2(cnn, s_tl, s_vl, epochs=3, lr=1e-3, loss_fn=nn.CrossEntropyLoss())
+torch.save({"state_dict": bag.state_dict(), "itos": vocab.itos, "dim": 32, "hidden": 32}, "artifacts/sentiment.pt")
+torch.save({"state_dict": cnn.state_dict(), "classes": vision.SHAPE_CLASSES, "size": 32}, "artifacts/dish.pt")
+
+client = TestClient(serve.create_app(eta, sentiment=(bag, vocab), dish=(cnn, vision.SHAPE_CLASSES)))
+print(client.get("/health").json())
+print(client.post("/eta", json={"orders": orders[:2]}).json())
+bad = dict(orders[0]); del bad["trip_distance"]
+r = client.post("/eta", json={"orders": [bad]}); print(r.status_code, r.json()["detail"][0])
+print(client.post("/sentiment", json={"texts": ["Delicious, will order again.", "Cold, soggy and an hour late."]}).json())
+images, labels = vision.make_shapes(2, seed=3)
+print(client.post("/dish", json={"pixels": images[0].tolist()}).json(), "| true:", vision.SHAPE_CLASSES[labels[0]])
+r = client.post("/dish", json={"pixels": images[0].permute(1, 2, 0).tolist()}); print(r.status_code, r.json())
+'''),
+        md("## 7. Latency"),
+        code('''
+importlib.reload(serve)
+single = serve.latency_stats(lambda o: eta.predict([o]), orders, repeats=5)
+batched = serve.latency_stats(lambda os: eta.predict(os), [orders * 8], repeats=5)
+http = serve.latency_stats(lambda o: client.post("/eta", json={"orders": [o]}), orders, repeats=3)
+print(f"one order per call: p50 {single['p50_ms']:.2f} ms, p95 {single['p95_ms']:.2f} ms")
+print(f"64 orders per call: {batched['mean_ms']:.2f} ms total, {batched['mean_ms'] / 64:.3f} ms per order")
+print(f"HTTP round trip, one order: p50 {http['p50_ms']:.2f} ms")
+'''),
+        md("### Break it on purpose: a fresh normalizer"),
+        code('''
+fresh = Normalizer().fit(torch.tensor(__import__("pandas").DataFrame(orders)[trips.CONTINUOUS].values, dtype=torch.float32))
+wrong = serve.EtaPredictor(model, fresh, hidden=(32, 32))
+print("trained statistics:", eta.normalizer.mean.tolist()); print("fresh statistics:  ", fresh.mean.tolist())
+print("right:", [round(v, 1) for v in eta.predict(orders[:4])]); print("wrong:", [round(v, 1) for v in wrong.predict(orders[:4])], "<- status 200, no error, minutes off")
+'''),
+        md("## 8. The real server\n\n`deploy/app.py` loads the artifacts you just wrote. Visit the printed URL + `/docs` if your environment exposes the port."),
+        code('''
+import subprocess, time, requests
+server = subprocess.Popen(["uvicorn", "deploy.app:app", "--host", "127.0.0.1", "--port", "8000"], stdout=open("server.log", "w"), stderr=subprocess.STDOUT)
+time.sleep(4)
+print(requests.get("http://127.0.0.1:8000/health").json())
+print(requests.post("http://127.0.0.1:8000/eta", json={"orders": orders[:2]}).json())
+print(requests.post("http://127.0.0.1:8000/sentiment", json={"texts": ["Never again."]}).json())
+server.terminate()
+'''),
+        md("## 9. Definition of done\n\nExpected: `7 passed`, then `111 passed` with no failures for everything so far (skipped tests belong to lessons you have not started)."),
+        code("!pytest tests/test_15.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 10. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 15: serving")),
+    ]
+    return notebook(cells)
+
+
+def lesson16() -> dict:
+    cap_src = (ROOT / "starters/lesson16/forkcast/capstone.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 16: Capstone, multimodal Forkcast
+
+Goes with the Lesson 16 page of the Forkcast course. One model for a listing's photo, description and numbers; an ablation over modalities; a model card; the artifact; and the whole test suite green.
+
+Runtime: CPU is enough (about half a minute for the full ablation).
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/capstone.py`\n\nThe data generator, dataset and loaders are provided. Write `collate_listings`, `FusionModel`, `run_ablation` and `write_model_card` as the page builds them."),
+        code("%%writefile forkcast/capstone.py\n" + cap_src),
+        md("## 3. The listings"),
+        code('''
+import importlib, itertools, torch
+from torch import nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
+from forkcast import capstone as cap, train, debug
+from forkcast.model import count_parameters
+importlib.reload(cap)
+
+images, texts, tabular, labels = cap.make_listings(1600)
+print(images.shape, tabular.shape, "label balance", labels.float().mean().item())
+plt.figure(figsize=(12, 2.4)); plt.axis("off"); plt.imshow(make_grid(images[:8], nrow=8).permute(1, 2, 0))
+for t, tab, l in zip(texts[:8], tabular[:8], labels[:8]):
+    print(f"{l.item()}  {t:45s} price {tab[0]:5.1f}  prep {tab[1]:4.0f}  rating {tab[2]:.1f}")
+train_loader, val_loader, vocab, (tab_mean, tab_std) = cap.listing_loaders()
+images_b, ids, mask, tabular_b, labels_b = next(iter(train_loader))
+print(images_b.shape, ids.shape, mask.shape, tabular_b.shape, labels_b.shape)
+'''),
+        md("## 4. The fusion model"),
+        code('''
+importlib.reload(cap)
+model = cap.FusionModel(len(vocab))
+print(model(images_b, ids, mask, tabular_b).shape, "|", count_parameters(model), "parameters")
+tab_only = cap.FusionModel(len(vocab), modalities=("tabular",))
+print("tabular-only ignores the photo:", torch.allclose(tab_only(images_b, ids, mask, tabular_b), tab_only(torch.rand_like(images_b), ids, mask, tabular_b)))
+'''),
+        md("## 5. The ablation: all seven combinations"),
+        code('''
+importlib.reload(cap)
+combos = [c for r in range(1, 4) for c in itertools.combinations(cap.MODALITIES, r)]
+results = cap.run_ablation(lambda m: cap.FusionModel(len(vocab), modalities=m), train_loader, val_loader, combos, epochs=12, lr=2e-3)
+for k, v in results.items():
+    print(f"{' + '.join(k):26s} {v:.3f}")
+plt.figure(figsize=(8, 3)); plt.bar([" + ".join(k) for k in results], list(results.values())); plt.xticks(rotation=30, ha="right"); plt.axhline(0.5, ls="--", c="k"); plt.ylabel("validation accuracy");
+'''),
+        md("## 6. Train the fused model and evaluate it the Lesson 10 way"),
+        code('''
+torch.manual_seed(0)
+fused = cap.FusionModel(len(vocab))
+h = train.fit_v2(fused, train_loader, val_loader, epochs=12, lr=2e-3, loss_fn=nn.CrossEntropyLoss())
+print("fused validation accuracy:", round(cap.accuracy_fusion(fused, val_loader), 3))
+fused.eval(); logits_all, y_all, imgs_all = [], [], []
+with torch.no_grad():
+    for im, i_, mk, tb, y in val_loader:
+        logits_all.append(fused(im, i_, mk, tb)); y_all.append(y); imgs_all.append(im)
+logits_all, y_all, imgs_all = torch.cat(logits_all), torch.cat(y_all), torch.cat(imgs_all)
+probs = torch.softmax(logits_all, 1)
+print("ECE:", round(debug.expected_calibration_error(probs, y_all), 3))
+picks = debug.misclassified(logits_all, y_all, k=8)
+print("most confident mistakes:", [(i, t, p, round(c, 2)) for i, t, p, c in picks[:4]])
+plt.figure(figsize=(12, 2.4)); plt.axis("off"); plt.imshow(debug.gallery(imgs_all, picks).permute(1, 2, 0))
+'''),
+        md("## 7. The model card"),
+        code('''
+importlib.reload(cap)
+card = cap.write_model_card("MODEL_CARD.md", "Forkcast listing demand v1",
+    intended_use="Rank new listings for review priority. Not for pricing decisions.",
+    data="1,600 synthetic listings: Lesson 7 shapes as photos, templated descriptions, simulated prices, prep times and ratings.",
+    metrics={"accuracy (fused)": results[("image", "text", "tabular")], "accuracy (best single modality)": max(v for k, v in results.items() if len(k) == 1), "epochs": 12},
+    limitations=["Synthetic data only; real photos and reviews will shift the distribution.", "32x32 images; a real dish model would use Lesson 9's pretrained backbone.", "The label is 'above median demand', not observed orders."],
+    lesson_trail=["Lesson 7: image encoder (two conv blocks)", "Lesson 11: text encoder (embedding, masked mean)", "Lesson 4: tabular encoder (MLP)", "Lesson 8: training loop v2", "Lesson 15: artifact format"])
+print(card)
+'''),
+        md("## 8. Ship it as an artifact"),
+        code('''
+import os; os.makedirs("artifacts", exist_ok=True)
+torch.save({"state_dict": fused.state_dict(), "itos": vocab.itos, "tab_mean": tab_mean, "tab_std": tab_std, "d": 32, "hidden": 64, "size": 32, "modalities": list(fused.modalities)}, "artifacts/listing.pt")
+bundle = torch.load("artifacts/listing.pt", weights_only=True)
+fresh = cap.FusionModel(len(bundle["itos"]), d=bundle["d"], hidden=bundle["hidden"], size=bundle["size"], modalities=tuple(bundle["modalities"]))
+fresh.load_state_dict(bundle["state_dict"]); fresh.eval()
+with torch.inference_mode():
+    print("identical predictions after reload:", torch.equal(fresh(images_b, ids, mask, tabular_b), fused(images_b, ids, mask, tabular_b)))
+'''),
+        md("### Break it on purpose: raw tabular inputs"),
+        code('''
+raw_mean, raw_std = torch.zeros(3), torch.ones(3)        # no standardization
+imgs_, texts_, tab_, labels_ = cap.make_listings(1600)
+raw_train = torch.utils.data.DataLoader(cap.ListingsDataset(imgs_[:1200], texts_[:1200], tab_[:1200], labels_[:1200], vocab, raw_mean, raw_std), batch_size=64, shuffle=True, collate_fn=cap.collate_listings)
+raw_val = torch.utils.data.DataLoader(cap.ListingsDataset(imgs_[1200:], texts_[1200:], tab_[1200:], labels_[1200:], vocab, raw_mean, raw_std), batch_size=64, collate_fn=cap.collate_listings)
+torch.manual_seed(0); raw_model = cap.FusionModel(len(vocab))
+train.fit_v2(raw_model, raw_train, raw_val, epochs=12, lr=2e-3, loss_fn=nn.CrossEntropyLoss())
+print("fused, raw tabular inputs:", round(cap.accuracy_fusion(raw_model, raw_val), 3), "| standardized:", round(results[("image", "text", "tabular")], 3))
+'''),
+        md("## 9. Definition of done\n\nExpected: `7 passed`, then `118 passed` for the whole course (the only skips are the GPU test and the optional Lesson 17)."),
+        code("!pytest tests/test_16.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 10. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 16: capstone, multimodal Forkcast")),
+    ]
+    return notebook(cells)
+
+
+def lesson17() -> dict:
+    exp_src = (ROOT / "starters/lesson17/forkcast/experiments.py").read_text(encoding="utf-8")
+    cells = [
+        md("""
+# Lesson 17: Experiment hygiene (optional)
+
+Goes with the Lesson 17 page of the Forkcast course. Seeds, a frozen config with a fingerprint, reproducible logged runs, grouping the log by configuration, and seed noise against a real difference.
+
+Runtime: CPU is enough; every run takes well under a second.
+"""),
+        md("## 1. Clone your repository and install the package"),
+        code(SETUP),
+        md("## 2. `forkcast/experiments.py`\n\n`git_commit` and `load_log` are provided. Write `seed_everything`, the `RunConfig` methods, `run_experiment`, `compare` and `repeat_with_seeds`."),
+        code("%%writefile forkcast/experiments.py\n" + exp_src),
+        md("## 3. Seeds"),
+        code('''
+import importlib, random, torch
+from dataclasses import replace
+from torch.utils.data import DataLoader, TensorDataset
+from forkcast import experiments as exp
+from forkcast.model import MLP
+importlib.reload(exp)
+
+g1 = exp.seed_everything(123); a = MLP(4, (8,)); order1 = [b[0].tolist() for b in DataLoader(TensorDataset(torch.arange(16)), batch_size=4, shuffle=True, generator=g1)]
+g2 = exp.seed_everything(123); b = MLP(4, (8,)); order2 = [b_[0].tolist() for b_ in DataLoader(TensorDataset(torch.arange(16)), batch_size=4, shuffle=True, generator=g2)]
+print("same weights:", all(torch.equal(p, q) for p, q in zip(a.parameters(), b.parameters())), "| same shuffle:", order1 == order2)
+print("deterministic algorithms:", torch.are_deterministic_algorithms_enabled(), "| cudnn.benchmark:", torch.backends.cudnn.benchmark)
+'''),
+        md("## 4. Configs and fingerprints"),
+        code('''
+importlib.reload(exp)
+cfg = exp.RunConfig(hidden=(16, 16), lr=0.005, seed=3)
+cfg.to_json("run.json")
+print("round trip equal:", exp.RunConfig.from_json("run.json") == cfg)
+print("fingerprints:", cfg.fingerprint(), replace(cfg, lr=0.01).fingerprint(), replace(cfg, seed=4).fingerprint())
+'''),
+        md("## 5. Reproducible, logged runs"),
+        code('''
+importlib.reload(exp)
+import os
+if os.path.exists("experiments.jsonl"):
+    os.remove("experiments.jsonl")
+a = exp.run_experiment(exp.RunConfig(), "experiments.jsonl")
+b = exp.run_experiment(exp.RunConfig(), "experiments.jsonl")
+print("same digits:", a["best_val"] == b["best_val"], "|", round(a["best_val"], 4), "in", round(a["seconds"], 2), "s | commit", a["commit"])
+print(open("experiments.jsonl").readline()[:240])
+'''),
+        md("## 6. Three experiments, five seeds each"),
+        code('''
+importlib.reload(exp)
+import math
+seeds = [0, 1, 2, 3, 4]
+small = exp.repeat_with_seeds(exp.RunConfig(), seeds, "experiments.jsonl")
+big = exp.repeat_with_seeds(replace(exp.RunConfig(), hidden=(64, 64)), seeds, "experiments.jsonl")
+wd = exp.repeat_with_seeds(replace(exp.RunConfig(), weight_decay=1e-3), seeds, "experiments.jsonl")
+for name, r in [("(32, 32)", small), ("(64, 64)", big), ("(32, 32) + weight decay", wd)]:
+    print(f"{name:26s} {[round(v, 3) for v in r['values']]}  mean {r['mean']:.3f}  std {r['std']:.3f}")
+print(exp.compare(exp.load_log("experiments.jsonl")).to_string())
+print("spread of a 5-seed mean, small net:", round(small["std"] * math.sqrt(2 / 5), 3), "| (64,64) better by", round(small["mean"] - big["mean"], 3), "| weight decay better by", round(small["mean"] - wd["mean"], 3))
+'''),
+        md("### Break it on purpose: a stray random call"),
+        code('''
+def leaky_run(config):
+    idx = list(range(10)); random.shuffle(idx)          # unseeded randomness BEFORE seed_everything
+    return exp.run_experiment(config)["best_val"], idx[:3]
+r1 = leaky_run(exp.RunConfig()); r2 = leaky_run(exp.RunConfig())
+print("the run itself still matches:", r1[0] == r2[0], "| but the pre-seed shuffle does not:", r1[1], r2[1])
+print("anything downstream of that shuffle would drift between runs; move it after seed_everything and it is pinned")
+'''),
+        md("## 7. Definition of done\n\nExpected: `7 passed`, then `125 passed` for the whole course (the only skip is the GPU test)."),
+        code("!pytest tests/test_17.py -q"),
+        code("!pytest -m fast -q"),
+        md("## 8. Commit and push"),
+        code(PUSH.replace("{COMMIT_MESSAGE}", "Lesson 17: experiment hygiene")),
+    ]
+    return notebook(cells)
+
+
+LESSONS = {"lesson00.ipynb": lesson00, "lesson01.ipynb": lesson01, "lesson02.ipynb": lesson02, "lesson03.ipynb": lesson03, "lesson04.ipynb": lesson04, "lesson05.ipynb": lesson05, "lesson06.ipynb": lesson06, "lesson07.ipynb": lesson07, "lesson08.ipynb": lesson08, "lesson09.ipynb": lesson09, "lesson10.ipynb": lesson10, "lesson11.ipynb": lesson11, "lesson12.ipynb": lesson12, "lesson13.ipynb": lesson13, "lesson14.ipynb": lesson14, "lesson15.ipynb": lesson15, "lesson16.ipynb": lesson16, "lesson17.ipynb": lesson17}
 
 
 def main() -> None:

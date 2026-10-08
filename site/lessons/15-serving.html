@@ -1,0 +1,296 @@
+<!-- Lesson 15: Serving. Section ids are prefixed l15-; rail links use #lesson-15/<section>. -->
+<article class="page" data-lesson="15" data-title="Serving" id="lesson-15" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-15/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-15/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-15/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-15/artifact" data-section="artifact">The artifact</a></li>
+        <li><a href="#lesson-15/inference" data-section="inference">Inference</a></li>
+        <li><a href="#lesson-15/export" data-section="export">Export</a></li>
+        <li><a href="#lesson-15/api" data-section="api">The API</a></li>
+        <li><a href="#lesson-15/latency" data-section="latency">Latency and batching</a></li>
+        <li><a href="#lesson-15/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-15/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-15/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-15/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">15</div>
+      <div>
+        <h1>Serving</h1>
+        <p class="meta">Part 4, Shipping. About 2.5 hours. No GPU needed. <b>You'll leave with</b> Forkcast's three models behind one HTTP service that validates its inputs, answers in milliseconds, and runs from a single artifact file in a container.</p>
+      </div>
+    </div>
+
+    <section id="l15-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Package a trained model with the preprocessing it depends on into one artifact, and load it with inference code only.</li>
+        <li>Write an inference path that is correct (same features as training) and cheap (<code>eval</code>, <code>inference_mode</code>, batched).</li>
+        <li>Export a model with <code>torch.export</code> and verify the exported program matches for any batch size.</li>
+        <li>Expose <code>/eta</code>, <code>/sentiment</code> and <code>/dish</code> with FastAPI, with request validation and honest error codes.</li>
+        <li>Measure p50 and p95 latency, explain the batching trade-off, and package the service in a Dockerfile.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.inference_mode</code></li><li><code>torch.export.export / save / load</code></li><li><code>torch.export.Dim</code></li><li><code>torch.set_num_threads</code></li>
+        <li><code>weights_only=True</code></li><li><code>FastAPI + pydantic</code></li><li><code>TestClient</code></li><li><code>time.perf_counter</code></li>
+      </ul>
+    </section>
+
+    <section id="l15-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l15-dod-tests" data-dod="tests">
+          <label for="l15-dod-tests">The Lesson 15 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_15.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l15-dod-fast" data-dod="fast">
+          <label for="l15-dod-fast">Everything so far still passes: <code>111 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l15-dod-quiz" data-dod-auto="quiz">
+          <label for="l15-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l15-dod-push" data-dod="push">
+          <label for="l15-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 15 is done. Forkcast's models answer HTTP requests; the capstone puts them together.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l15-project">Where we are</h2>
+    <p>Everything so far ended in a notebook. Forkcast's app needs to ask, over HTTP, how long an order will take, what is in a photo, and whether a review is happy, and get an answer in a few milliseconds from a process that runs for months without a data scientist watching it. That is <em>serving</em>, and it has its own failure modes: the model gets different features than it trained on, a request arrives malformed, the service is too slow one order at a time, the weights file loads but nobody knows which run produced it. This lesson builds the service in the repository, tests it in-process with FastAPI's test client, and packages it in a Dockerfile.</p>
+
+    <h2 id="l15-artifact">The artifact: everything inference needs, nothing else</h2>
+    <p>Lesson 3 saved a <code>state_dict</code>. A service needs more and less than that. More: the normalizer's mean and standard deviation, because the weights only mean something for inputs scaled the way training scaled them; the architecture sizes, to rebuild the same shapes; for text, the vocabulary; for classifiers, the class names; and a version, so a prediction can be traced to a run. Less: no optimizer state, no training data, no training code. The artifact must open with <code>torch.load(path, weights_only=True)</code> and nothing from the training side of the repository.</p>
+
+    <div class="widget" data-widget="artifactBundle"></div>
+
+<pre><code>class EtaPredictor:
+    def save(self, path):
+        torch.save({"state_dict": self.model.state_dict(), "mean": self.normalizer.mean,
+                    "std": self.normalizer.std, "hidden": list(self.hidden)}, path)         <span class="c"># 27 kB</span>
+    @classmethod
+    def load(cls, path):
+        bundle = torch.load(path, map_location="cpu", weights_only=True)
+        model = TabularNet(4, zone_vocab=ZONE_VOCAB, hidden=tuple(bundle["hidden"]))
+        model.load_state_dict(bundle["state_dict"])
+        normalizer = Normalizer(); normalizer.mean, normalizer.std = bundle["mean"], bundle["std"]
+        return cls(model, normalizer, tuple(bundle["hidden"]))</code></pre>
+
+    <h2 id="l15-inference">Inference: the training features, without the training machinery</h2>
+    <p>The feature code at serving time must be the training code, not a re-implementation of it: the same column order, the same normalizer object, the same <code>long</code> ids. Build the batch from a DataFrame so the columns are looked up by name. Then <code>model.eval()</code> once at load, and <code>torch.inference_mode()</code> around every call: like <code>no_grad</code> but stronger, it skips the autograd bookkeeping entirely and the tensors it produces can never be used in a backward pass, which is what you want from a service.</p>
+<pre><code>def features(self, orders):
+    frame = pd.DataFrame(orders)                                     <span class="c"># columns by name, never by position</span>
+    cont = torch.tensor(frame[CONTINUOUS].values, dtype=torch.float32)
+    cat = torch.tensor(frame[CATEGORICAL].values, dtype=torch.long)
+    return self.normalizer.transform(cont), cat
+
+def predict(self, orders):
+    with torch.inference_mode():
+        return self.model(*self.features(orders)).tolist()           <span class="c"># plain floats: JSON cannot carry a tensor</span>
+
+eta.predict(orders[:3])                              <span class="out">[5.41, 13.49, 11.63]   minutes; batched and single calls agree to 1e-4</span></code></pre>
+
+    <h2 id="l15-export">Export: a model without Python</h2>
+    <p><code>torch.export</code> traces the model into a graph of operations with fixed shapes, except the ones you declare dynamic, and saves it as a <code>.pt2</code> file that loads without the model's class or any of your code. It is the route to runtimes that are not Python: mobile, C++, specialised inference servers. Declare the batch dimension dynamic, export with example inputs, and verify the loaded program agrees with the original for batch sizes you did not export with. ONNX is the other common target and follows the same shape: export, reload in the target runtime, compare outputs before trusting it.</p>
+<pre><code>batch = torch.export.Dim("batch")
+program = torch.export.export(model.eval(), (cont[:4], cat[:4]), dynamic_shapes=({0: batch}, {0: batch}))
+torch.export.save(program, "eta.pt2")                <span class="c"># 51 kB, no class definition needed to load</span>
+exported = torch.export.load("eta.pt2").module()
+(exported(cont, cat) - model(cont, cat)).abs().max()  <span class="out">tensor(0.)   for batches of 1, 3 and 8</span></code></pre>
+
+    <h2 id="l15-api">The API: validate first, then predict</h2>
+    <p>FastAPI turns Python functions into HTTP endpoints and uses pydantic models to parse and validate request bodies before your code runs. A missing field, a string where a number belongs, a zone id of 999: all answered with status 422 and a message naming the field, and the model is never called. The endpoints return plain JSON; a model that is not loaded answers 503 rather than crashing; a request whose image has the wrong shape gets a 400 that says what shape was expected. Follow one request through.</p>
+
+    <div class="widget" data-widget="requestFlow"></div>
+
+<pre><code>class Order(BaseModel):
+    trip_distance: float = Field(gt=0, le=50)
+    pickup_hour: int = Field(ge=0, le=23)
+    weekday: int = Field(ge=0, le=6)
+    passenger_count: int = Field(ge=1, le=6)
+    pu_zone: int = Field(ge=0, lt=ZONE_VOCAB)
+    do_zone: int = Field(ge=0, lt=ZONE_VOCAB)
+
+@app.post("/eta")
+def predict_eta(request: EtaRequest):
+    return {"minutes": eta.predict([o.model_dump() for o in request.orders])}
+
+client = TestClient(create_app(eta))                 <span class="c"># in-process: no server, no network, runs in CI</span>
+client.post("/eta", json={"orders": orders[:2]}).json()   <span class="out">{'minutes': [5.407, 13.490]}</span>
+client.post("/eta", json={"orders": [order_without_distance]}).json()["detail"][0]
+<span class="out">{'type': 'missing', 'loc': ['body', 'orders', 0, 'trip_distance'], 'msg': 'Field required'}   status 422</span></code></pre>
+
+    <h2 id="l15-latency">Latency and batching</h2>
+    <p>Measure, do not guess: time each call with <code>perf_counter</code>, repeat, and report percentiles. The median says what a typical request sees; the 95th percentile says what one in twenty sees, and that is the number users notice. On this CPU one order costs about 1 ms of model time, of which almost all is fixed overhead: sixty-four orders in one call cost 1.2 ms in total, 0.02 ms each. A service under load therefore collects the requests that arrive within a short window and runs them as one batch, trading a few milliseconds of waiting for fifty times the throughput.</p>
+
+    <div class="widget" data-widget="batchingLatency"></div>
+
+<pre><code>latency_stats(lambda o: eta.predict([o]), orders, repeats=5)
+<span class="out">{'p50_ms': 1.06, 'p95_ms': 1.27, 'mean_ms': 1.09, 'n': 40}      one order per call</span>
+latency_stats(lambda os: eta.predict(os), [orders * 8], repeats=5)["mean_ms"] / 64
+<span class="out">0.019 ms per order                                               sixty-four per call</span>
+latency_stats(lambda o: client.post("/eta", json={"orders": [o]}), orders)["p50_ms"]
+<span class="out">2.88 ms   the HTTP round trip in-process: parsing and validation cost more than the model</span></code></pre>
+    <p><code>torch.set_num_threads</code> matters in a service: PyTorch defaults to all cores, which fights the web server for them; half is a good start. And the Dockerfile in <code>deploy/</code> installs the CPU build of torch, copies the package and the artifacts, and starts <code>uvicorn deploy.app:app</code>: the same service, anywhere Docker runs.</p>
+
+    <h2 id="l15-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="95" data-explain="The 95th percentile: 95 of 100 requests are at least that fast, 5 are slower. It is the latency figure users complain about." data-hint="Which percentile leaves 5 of 100 above it?">
+      <div class="quiz-row"><span class="q">1. Of 100 timed requests, 5 took longer than 1.3 ms and 95 took less. Which percentile is 1.3 ms?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="1.64" data-explain="1 ms fixed plus 32 × 0.02 ms: 1.64 ms for the whole batch, about 0.05 ms per order." data-hint="fixed + per_item × items.">
+      <div class="quiz-row"><span class="q">2. A forward pass costs 1 ms fixed plus 0.02 ms per order. How many ms does a batch of 32 orders take?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="422" data-explain="Unprocessable Entity: the body did not match the pydantic model. The model function never ran." data-hint="FastAPI's validation status code.">
+      <div class="quiz-row"><span class="q">3. A client posts an order without <code>trip_distance</code>. What HTTP status does the service return?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="2" data-explain="The mean and the standard deviation, one vector of 4 each. Without them the weights are applied to unscaled inputs." data-hint="What does Normalizer.transform need?">
+      <div class="quiz-row"><span class="q">4. Besides the weights and the hidden sizes, how many normalizer tensors does the ETA artifact store?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="1" data-explain="Only dimension 0, the batch, is declared dynamic with torch.export.Dim; the feature dimensions are fixed at export." data-hint="Which dimension changes between requests?">
+      <div class="quiz-row"><span class="q">5. How many dimensions of the exported ETA program are dynamic?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="503" data-explain="Service Unavailable: the endpoint exists but its model is not loaded. Saying so beats a stack trace." data-hint="Not the client's fault, and not a crash.">
+      <div class="quiz-row"><span class="q">6. The service was started without a sentiment model and a client posts to <code>/sentiment</code>. What status should it return?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l15-build">Build it</h2>
+    <p>One new file, <code>forkcast/serve.py</code>, plus the provided <code>deploy/app.py</code> and <code>deploy/Dockerfile</code>. The pydantic request models are provided; <code>EtaPredictor</code>'s features, predict, save and load, <code>export_program</code>, <code>load_exported</code>, <code>latency_stats</code> and the three endpoint bodies are yours.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 15 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson15.ipynb" href="#lesson-15/build">Open lesson15.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Train the ETA model and write <code>features</code> and <code>predict</code></h3>
+        <p>Lesson 6's pipeline, a few epochs. Then check that <code>predict</code> on eight orders agrees with eight single calls, and that nothing inside carries <code>requires_grad</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>save</code> and <code>load</code>, and round-trip the artifact</h3>
+<pre><code>eta.save("artifacts/eta.pt")
+loaded = serve.EtaPredictor.load("artifacts/eta.pt")   <span class="c"># no training frame, no training code</span>
+torch.allclose(torch.tensor(loaded.predict(orders)), torch.tensor(eta.predict(orders)))   <span class="out">True</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>export_program</code> and <code>load_exported</code></h3>
+        <p>Export with a batch of 4, reload, and compare on batches of 1, 3 and 8. The maximum difference should be exactly zero.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write the three endpoint bodies and test them in-process</h3>
+<pre><code>client = TestClient(serve.create_app(eta, sentiment=(bag, vocab), dish=(cnn, SHAPE_CLASSES)))
+client.get("/health").json()                         <span class="out">{'status': 'ok', 'torch': '2.x'}</span>
+client.post("/sentiment", json={"texts": ["Cold, soggy and an hour late."]}).json()
+<span class="out">{'results': [{'label': 'negative', 'p_positive': 0.01}]}</span>
+client.post("/dish", json={"pixels": image.permute(1, 2, 0).tolist()}).json()   <span class="out">{'detail': 'expected shape (3, H, W), got (32, 32, 3)'}   status 400</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>latency_stats</code> and measure</h3>
+        <p>Single orders, then sixty-four per call, then the HTTP round trip. Write the three numbers down; they are the baseline for every optimisation you might try later.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: a fresh normalizer</h3>
+        <p>Build an <code>EtaPredictor</code> with the trained model but a <code>Normalizer</code> fitted on the eight request orders instead of the training frame. The service answers 200 with confident minutes that are wrong by a large margin, and no log line says so. Then compare the artifact's <code>mean</code> with the fresh one. This is the serving bug that reaches production most often, and the artifact design is the defence.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the real service</h3>
+<pre><code>!pip install -q uvicorn
+!nohup uvicorn deploy.app:app --host 127.0.0.1 --port 8000 &gt; server.log 2&gt;&amp;1 &amp;
+import requests, time; time.sleep(3)
+requests.post("http://127.0.0.1:8000/eta", json={"orders": orders[:2]}).json()   <span class="out">{'minutes': [5.41, 13.49]}</span></code></pre>
+        <p>The same artifacts, loaded by <code>deploy/app.py</code>, behind a real server on a real port. Visit <code>/docs</code> in a browser for the interactive API page FastAPI generates from the pydantic models. The Dockerfile does the same in a container; building it needs Docker, which Colab does not have, so that step is for your laptop.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_15.py -q
+<span class="out">7 passed in 4.4s</span>
+!pytest -m fast -q
+<span class="out">111 passed, … skipped, 1 deselected in 33.0s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 15: serving"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l15-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>422 Unprocessable Entity, detail: loc ['query', 'request'], Field required</dt>
+      <dd>FastAPI did not recognise the pydantic class, usually because the models were defined inside a function under <code>from __future__ import annotations</code>, which turns annotations into strings. Define request models at module level.</dd>
+
+      <dt>Predictions are confident and wrong, status 200</dt>
+      <dd>The normalizer or the column order differs from training. Use the artifact's statistics and build features from a DataFrame by column name.</dd>
+
+      <dt>RuntimeError: Error(s) in loading state_dict: size mismatch</dt>
+      <dd>The artifact's <code>hidden</code> sizes were not used to rebuild the model. Read the config from the artifact, never from the training notebook.</dd>
+
+      <dt>torch.export raises on a data-dependent branch</dt>
+      <dd>The model has Python control flow that depends on tensor values. Rewrite it with tensor operations, or export a submodule; the course's models are export-friendly on purpose.</dd>
+
+      <dt>Exported program fails for a batch size other than the example's</dt>
+      <dd>The batch dimension was not declared dynamic. <code>dynamic_shapes</code> with a <code>torch.export.Dim</code> for dimension 0 of every input.</dd>
+
+      <dt>The service is slow under load though single requests are fast</dt>
+      <dd>One forward per request. Batch the requests arriving within a few milliseconds; and check <code>torch.get_num_threads()</code> is not fighting the server for cores.</dd>
+    </dl>
+
+    <h2 id="l15-stretch">Stretch</h2>
+    <p>Add a request batcher to the service: an <code>asyncio</code> queue that collects <code>/eta</code> requests for up to five milliseconds and runs them as one <code>predict</code> call, then measure p95 at 500 requests per second with and without it. Then export the sentiment model with <code>torch.onnx.export</code>, run it with <code>onnxruntime</code>, and compare outputs and latency with the PyTorch path.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-14"><span class="dir">Previous</span><span class="title">Lesson 14: Recommendations</span></a>
+      <a class="next" href="#lesson-16"><span class="dir">Next</span><span class="title">Lesson 16: Capstone, multimodal Forkcast</span></a>
+    </nav>
+  </main>
+</article>

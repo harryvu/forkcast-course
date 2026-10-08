@@ -1,6 +1,6 @@
 # Roadmap: Lessons 6 to 10
 
-Lessons 0 to 10 are built, which completes Parts 1 and 2; Lessons 6 and 7 followed the specs below (Lesson 7 uses synthetic shapes for the
+All 18 lessons (0 to 17) are built; Lessons 6 and 7 followed the specs below (Lesson 7 uses synthetic shapes for the
 offline tests and streams ten Food-101 classes from the Hugging Face Hub in the notebook instead of the full
 torchvision download). This file fixes the design of the next five so each can be
 built to the same pattern: one `site/lessons/NN-*.html` fragment with 2–3 widgets and

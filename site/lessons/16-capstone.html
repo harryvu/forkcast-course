@@ -1,0 +1,278 @@
+<!-- Lesson 16: Capstone, multimodal Forkcast. Section ids are prefixed l16-; rail links use #lesson-16/<section>. -->
+<article class="page" data-lesson="16" data-title="Capstone: multimodal Forkcast" id="lesson-16" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-16/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-16/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-16/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-16/task" data-section="task">The task</a></li>
+        <li><a href="#lesson-16/fusion" data-section="fusion">Fusion</a></li>
+        <li><a href="#lesson-16/ablation" data-section="ablation">Ablation</a></li>
+        <li><a href="#lesson-16/card" data-section="card">The model card</a></li>
+        <li><a href="#lesson-16/map" data-section="map">The whole course</a></li>
+        <li><a href="#lesson-16/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-16/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-16/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-16/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">16</div>
+      <div>
+        <h1>Capstone: multimodal Forkcast</h1>
+        <p class="meta">Part 4, Shipping. About 3 hours. GPU optional. <b>You'll leave with</b> one model that reads a listing's photo, its description and its numbers together, an ablation that proves each input earns its place, a model card, and a full test suite that is green from Lesson 0 to here.</p>
+      </div>
+    </div>
+
+    <section id="l16-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Combine an image encoder, a text encoder and a tabular encoder into one network with a shared head.</li>
+        <li>Build a collate function for items whose parts have different shapes, and keep the toolkit's conventions so <code>fit_v2</code> trains the result unchanged.</li>
+        <li>Run an ablation over modalities with one model class and a fair seed, and read the table.</li>
+        <li>Write a model card: intended use, data, evaluation, limitations, provenance.</li>
+        <li>Package the fused model as a Lesson 15 artifact that reloads to identical predictions.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.cat over encoders</code></li><li><code>zero vectors as ablation switches</code></li><li><code>DataLoader(sampler=)</code></li><li><code>torch.equal on reloaded models</code></li><li><code>everything from Lessons 0 to 15</code></li>
+      </ul>
+    </section>
+
+    <section id="l16-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l16-dod-tests" data-dod="tests">
+          <label for="l16-dod-tests">The capstone tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_16.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l16-dod-fast" data-dod="fast">
+          <label for="l16-dod-fast">The whole course passes: <code>118 passed</code> and no failures. The only skips left are the GPU check and the optional Lesson 17.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l16-dod-quiz" data-dod-auto="quiz">
+          <label for="l16-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l16-dod-push" data-dod="push">
+          <label for="l16-dod-push">Pushed, with <code>MODEL_CARD.md</code> in the repository, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">The capstone is done. You built Forkcast's machine-learning backend from tensors up, and the tests prove it.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l16-project">Where we are</h2>
+    <p>Forkcast now has four models in four lessons' worth of files: minutes from order features, a dish from a photo, sentiment from a review, restaurants a customer will like. The capstone asks the question a product eventually asks: a new restaurant uploads a listing with a photo, a description and a price, and the app wants to know whether it will sell. The honest answer uses all three, and the capstone's job is to build the model that does, prove with an ablation that each input matters, and ship it the way Lesson 15 taught. The listings are synthetic so the tests run offline and so the signal can be planted on purpose; the notebook ends with pointers for doing the same on real data.</p>
+
+    <h2 id="l16-task">The task and the data</h2>
+    <p><code>make_listings</code> draws a photo (the Lesson 7 shapes, standing in for dish categories), a templated description whose words carry a portion and a freshness score, and three numbers: price, preparation minutes, rating. Demand is a weighted sum of all three plus noise, and the label is "above the median". By construction no single modality can get far: the image knows the category, the text knows the portion, the numbers know the price, and demand needs all of them.</p>
+<pre><code>images, texts, tabular, labels = make_listings(1600)
+images.shape, tabular.shape, labels.float().mean()  <span class="out">(torch.Size([1600, 3, 32, 32]), torch.Size([1600, 3]), tensor(0.5))</span>
+texts[:3]
+<span class="out">['Frozen pad thai, tiny portion.', 'Frozen lasagna, tiny portion.', 'Our pho: reheated, small serving.']</span>
+labels[:3]                                           <span class="out">tensor([1, 0, 0])   the first one sells on its photo and its price</span>
+
+train_loader, val_loader, vocab, (tab_mean, tab_std) = listing_loaders()
+images, ids, mask, tabular, labels = next(iter(train_loader))   <span class="c"># collate_listings: pad the text, stack the rest, label last</span></code></pre>
+
+    <h2 id="l16-fusion">Fusion: three encoders, one head</h2>
+    <p>Each modality gets the encoder the course built for it, reduced to a vector of 32 numbers: the two convolutional blocks of Lesson 7 with a linear projection, Lesson 11's embedding with the masked mean, Lesson 4's MLP on the three standardized numbers. The three vectors are concatenated into 96 and a small head classifies them. This is <em>late fusion</em>, the simplest and most robust way to combine inputs, and it lets the model learn how much to trust each one. One design choice does the ablation for free: the model takes a <code>modalities</code> tuple, and an input that is not in it contributes a zero vector, so one class trains all seven combinations.</p>
+
+    <div class="widget" data-widget="fusionLab"></div>
+
+<pre><code>class FusionModel(nn.Module):
+    def __init__(self, vocab_size, d=32, hidden=64, size=32, modalities=MODALITIES):
+        super().__init__()
+        self.modalities, self.d = tuple(modalities), d
+        self.image_encoder = nn.Sequential(Conv2d(3, 16, 3, padding=1), BatchNorm2d(16), ReLU(), MaxPool2d(2),
+                                           Conv2d(16, 32, 3, padding=1), BatchNorm2d(32), ReLU(), MaxPool2d(2), Flatten())
+        self.image_proj = nn.Linear(32 * (size // 4) ** 2, d)
+        self.text_embedding = nn.Embedding(vocab_size, d, padding_idx=0)
+        self.tab_encoder = nn.Sequential(nn.Linear(3, d), nn.ReLU(), nn.Linear(d, d))
+        self.head = nn.Sequential(nn.Linear(3 * d, hidden), nn.ReLU(), nn.Linear(hidden, 2))
+    def forward(self, images, ids, mask, tabular):
+        zeros = torch.zeros(images.shape[0], self.d, device=images.device)
+        parts = [self.encode_image(images) if "image" in self.modalities else zeros,
+                 self.encode_text(ids, mask) if "text" in self.modalities else zeros,
+                 self.tab_encoder(tabular) if "tabular" in self.modalities else zeros]
+        return self.head(torch.cat(parts, dim=1))                 <span class="c"># (N, 96) -> (N, 2)</span>
+
+count_parameters(FusionModel(len(vocab)))            <span class="out">79106   image 70,752 (the Flatten→Linear), text 832, tabular 1,184, head 6,338</span></code></pre>
+
+    <h2 id="l16-ablation">Ablation: does every input earn its place?</h2>
+    <p>Train the same model seven times, once per non-empty subset of modalities, with the same seed, data and budget, and compare validation accuracy. This is how you justify every input in a production model: an input that does not move the number is cost without benefit, and one that moves it a lot is where to invest in data quality. Measured in the sandbox, twelve epochs each:</p>
+<pre><code>combos = [c for r in range(1, 4) for c in itertools.combinations(MODALITIES, r)]
+results = run_ablation(lambda m: FusionModel(len(vocab), modalities=m), train_loader, val_loader, combos, epochs=12, lr=2e-3)
+<span class="out">image                    0.750
+text                     0.715
+tabular                  0.623
+image + text             0.790
+image + tabular          0.748
+text + tabular           0.725
+image + text + tabular   0.873</span></code></pre>
+    <p>Every single modality is well above chance and well below the fused model, and the fused model beats the best pair by eight points. Had "tabular" come out equal to the fused result, you would have shipped a model without an image branch, and known why.</p>
+
+    <h2 id="l16-card">The model card</h2>
+    <p>A model that ships without a model card is a model nobody can maintain. The card is a short Markdown file next to the artifact: what the model is for and what it is not for, what it was trained on, how it was evaluated and what the numbers were, where it is known to fail, and which code and lessons produced each part. <code>write_model_card</code> renders exactly those five sections; the content is yours to write, and writing it is where you discover what you do not know about your own model.</p>
+
+    <div class="widget" data-widget="modelCardBuilder"></div>
+
+    <h2 id="l16-map">The whole course in one model</h2>
+    <p>Look at what the capstone imports and every lesson is in it. The table below is the course read backwards: each idea, where it was taught, and where it sits in the system you just built.</p>
+
+    <div class="widget" data-widget="courseMap"></div>
+
+    <h2 id="l16-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="96" data-explain="Three encoders, 32 numbers each, concatenated along dim=1." data-hint="3 × d.">
+      <div class="quiz-row"><span class="q">1. Each encoder outputs 32 numbers. What is the width of the vector the head receives?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="7" data-explain="Three singles, three pairs, one triple: every non-empty subset of three modalities." data-hint="2³ − 1.">
+      <div class="quiz-row"><span class="q">2. How many model variants does the full ablation over three modalities train?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="0.123" data-explain="0.873 − 0.750: fusion beats the best single modality (the image) by twelve points." data-hint="Fused minus the best single row of the table, to three decimals.">
+      <div class="quiz-row"><span class="q">3. From the measured table, by how much does the fused model beat the best single modality?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="6208" data-explain="96 × 64 weights plus 64 biases: the first layer of the head." data-hint="in × out + out.">
+      <div class="quiz-row"><span class="q">4. How many parameters does the head's <code>nn.Linear(96, 64)</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="0" data-explain="An unused modality contributes a zero vector of shape (N, 32): the head's weights for it see no signal, and the same class serves every ablation." data-hint="What replaces a switched-off encoder's output?">
+      <div class="quiz-row"><span class="q">5. With <code>modalities=("text", "tabular")</code>, what value fills the 32 image positions of the concatenated vector?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="5" data-explain="Intended use, training data, evaluation, limitations, provenance: the questions a colleague will ask in six months." data-hint="Count the level-2 headings write_model_card produces.">
+      <div class="quiz-row"><span class="q">6. How many sections does the course's model card have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l16-build">Build it</h2>
+    <p>One new file, <code>forkcast/capstone.py</code>, plus a <code>MODEL_CARD.md</code> at the root of your repository. The data generator, dataset and loaders are provided; <code>collate_listings</code>, <code>FusionModel</code>, <code>run_ablation</code> and <code>write_model_card</code> are yours.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the capstone notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson16.ipynb" href="#lesson-16/build">Open lesson16.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Look at the listings and write <code>collate_listings</code></h3>
+        <p>Show a grid of eight listing photos with their descriptions and labels underneath. Then write the collate: pad the text ids with Lesson 11's <code>pad_batch</code>, stack the images, the tabular rows and the labels, and return the label last so <code>fit_v2</code> can unpack the batch.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>FusionModel</code></h3>
+<pre><code>model = cap.FusionModel(len(vocab))
+model(images, ids, mask, tabular).shape              <span class="out">torch.Size([64, 2])</span>
+tab_only = cap.FusionModel(len(vocab), modalities=("tabular",))
+torch.allclose(tab_only(images, ids, mask, tabular), tab_only(torch.rand_like(images), ids, mask, tabular))   <span class="out">True   it ignores the photo</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>run_ablation</code> and run all seven</h3>
+        <p>About thirty seconds on a CPU. Print the table, then plot it as a bar chart with the fused model last. If a pair comes out below one of its singles, that is normal noise at this data size; the fused model should be on top by a clear margin.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Train the fused model properly and evaluate it the Lesson 10 way</h3>
+        <p>Twelve epochs with <code>fit_v2</code>, then the confident mistakes, a reliability diagram and ECE from Lesson 10, and Grad-CAM on the image branch's last ReLU for a few listings. The image branch is only one third of the model, so expect fainter heatmaps than in Lesson 10.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>write_model_card</code> and your <code>MODEL_CARD.md</code></h3>
+<pre><code>cap.write_model_card("MODEL_CARD.md", "Forkcast listing demand v1",
+    intended_use="Rank new listings for review priority. Not for pricing decisions.",
+    data="1,600 synthetic listings: Lesson 7 shapes, templated descriptions, simulated prices.",
+    metrics={"accuracy (fused)": results[("image", "text", "tabular")], "accuracy (best single)": max(v for k, v in results.items() if len(k) == 1), "epochs": 12},
+    limitations=["Synthetic data only; real photos and reviews will shift the distribution.", "32×32 images.", "Labels are 'above median demand', not real orders."],
+    lesson_trail=["Lesson 7: image encoder", "Lesson 11: text encoder", "Lesson 4: tabular encoder", "Lesson 8: training loop", "Lesson 15: artifact"])</code></pre>
+        <p>Then read it as the colleague who inherits this model, and edit until it answers their questions.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Ship it as a Lesson 15 artifact</h3>
+        <p>Save the state dict with the vocabulary, the tabular statistics and the constructor arguments; rebuild from the file alone and check <code>torch.equal</code> on a validation batch. Add a <code>/listing</code> endpoint to <code>create_app</code> if you want the service to serve it; the stretch below sketches it.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: fuse before you normalize</h3>
+        <p>Build the loaders with raw tabular values (price in euros, prep in minutes) instead of standardized ones and retrain the fused model. The tabular branch's inputs are a hundred times larger than the other two branches' outputs, the head is dominated by them, and the fused accuracy falls toward the tabular-only number. Lesson 3's lesson, three lessons from the end.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the capstone tests, then the whole course</h3>
+<pre><code>!pytest tests/test_16.py -q
+<span class="out">7 passed in 16.5s</span>
+!pytest -m fast -q
+<span class="out">118 passed, 2 skipped, 1 deselected in 40.2s      skipped = the GPU test and the optional Lesson 17</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 16: capstone, multimodal Forkcast"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l16-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: Sizes of tensors must match except in dimension 1 (torch.cat)</dt>
+      <dd>One encoder returned a different batch size or the zero vector has the wrong shape. Every part must be <span class="shape">(N, d)</span>; build the zeros from <code>images.shape[0]</code>.</dd>
+
+      <dt>TypeError: forward() takes 5 positional arguments but 2 were given</dt>
+      <dd>The collate returned a tuple that <code>fit_v2</code> could not unpack as <code>*inputs, target</code>, usually because the label is not last.</dd>
+
+      <dt>The fused model is no better than tabular alone</dt>
+      <dd>Tabular inputs not standardized (see the break-it step), or a learning rate too low for the image branch to move in the epoch budget; the sandbox needed 12 epochs at 2e-3.</dd>
+
+      <dt>Ablation results are not comparable between runs</dt>
+      <dd>Different seeds or different epoch counts per variant. <code>torch.manual_seed(0)</code> before building each model, same loaders, same budget.</dd>
+
+      <dt>Reloaded model gives different predictions</dt>
+      <dd>The artifact is missing a constructor argument (<code>modalities</code>, <code>d</code>, <code>size</code>) or the vocabulary, so the rebuilt model has different shapes or different ids. Save everything the constructor and the encoding need.</dd>
+
+      <dt>Grad-CAM on the fused model is flat</dt>
+      <dd>Normal: the image branch carries part of the decision, and the heatmap shows only its part. Hook <code>image_encoder[6]</code> and compare an image-only variant to see the full-strength map.</dd>
+    </dl>
+
+    <h2 id="l16-stretch">Stretch</h2>
+    <p>Replace the image branch with Lesson 9's pretrained ResNet features and the text branch with Lesson 13's sentence embeddings, both precomputed and cached, and rerun the ablation; the fused result should jump. Then add <code>/listing</code> to the Lesson 15 service, accepting a photo, a description and the three numbers in one request, and write the pydantic model that validates all three. Finally, do it on real data: a listings table with photos, descriptions and prices from any marketplace dataset you can obtain, and write the model card honestly.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-15"><span class="dir">Previous</span><span class="title">Lesson 15: Serving</span></a>
+      <a class="next" href="#lesson-17"><span class="dir">Next</span><span class="title">Lesson 17: Experiment hygiene (optional)</span></a>
+    </nav>
+  </main>
+</article>

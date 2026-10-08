@@ -1,0 +1,265 @@
+<!-- Lesson 17 (optional): Experiment hygiene. Section ids are prefixed l17-; rail links use #lesson-17/<section>. -->
+<article class="page" data-lesson="17" data-title="Experiment hygiene" id="lesson-17" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-17/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-17/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-17/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-17/seeds" data-section="seeds">Seeds</a></li>
+        <li><a href="#lesson-17/config" data-section="config">Configs and fingerprints</a></li>
+        <li><a href="#lesson-17/log" data-section="log">The log</a></li>
+        <li><a href="#lesson-17/noise" data-section="noise">Seed noise</a></li>
+        <li><a href="#lesson-17/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-17/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-17/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-17/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">17</div>
+      <div>
+        <h1>Experiment hygiene</h1>
+        <p class="meta">Part 4, Shipping, optional. About 1.5 hours. No GPU needed. <b>You'll leave with</b> runs that reproduce to the last digit, a config that identifies each one, a log you can group and compare, and a rule for telling a real improvement from seed noise.</p>
+      </div>
+    </div>
+
+    <section id="l17-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Seed every source of randomness in a run and say which one you cannot.</li>
+        <li>Describe a run with a frozen config whose fingerprint changes when any field does, and round-trip it through JSON.</li>
+        <li>Run an experiment from its config, reproducibly, and append the result to a JSON-lines log with the commit and the time.</li>
+        <li>Group the log by configuration and read mean and spread across seeds.</li>
+        <li>Decide whether a difference between two configs is real, and how many seeds it takes to know.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.use_deterministic_algorithms</code></li><li><code>torch.cuda.manual_seed_all</code></li><li><code>cudnn.benchmark</code></li><li><code>DataLoader(generator=)</code></li>
+        <li><code>dataclasses.replace</code></li><li><code>hashlib.sha256</code></li><li><code>pd.read_json(lines=True)</code></li><li><code>Tensor.std (ddof=1)</code></li>
+      </ul>
+    </section>
+
+    <section id="l17-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l17-dod-tests" data-dod="tests">
+          <label for="l17-dod-tests">The Lesson 17 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_17.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l17-dod-fast" data-dod="fast">
+          <label for="l17-dod-fast">The whole course passes: <code>125 passed</code> and no failures. The only skip left is the GPU check.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l17-dod-quiz" data-dod-auto="quiz">
+          <label for="l17-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l17-dod-push" data-dod="push">
+          <label for="l17-dod-push">Pushed, with your <code>experiments.jsonl</code> committed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">That is the whole course. Every number on these pages was produced the way this lesson describes.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l17-project">Where we are</h2>
+    <p>Sixteen lessons of numbers: 5.44 against 15.43, 0.557 against 0.103, 0.873 against 0.750. Each was produced once in a sandbox, and the pages assert them. This lesson is about what gives a number like that the right to be believed: the run can be repeated and gives the same digits; the configuration that produced it is recorded, not remembered; the result sits in a log next to every other result, with the commit that produced it; and the comparison it supports was checked against the noise of the seed. None of this is PyTorch, exactly. All of it is the difference between an experiment and an anecdote.</p>
+
+    <h2 id="l17-seeds">Seeds: pin every source, know the one you cannot</h2>
+    <p>A training run draws random numbers in half a dozen places: the initial weights, the loader's shuffle, dropout masks, the synthetic data or the split, any <code>random</code> or NumPy call in augmentation code, and the GPU's choice of kernels. <code>torch.manual_seed</code> covers torch's generators on the CPU and every GPU; Python's and NumPy's need their own calls; the <code>DataLoader</code> takes a seeded <code>generator</code> for its shuffle; and <code>torch.use_deterministic_algorithms</code> asks the GPU to prefer reproducible kernels, which some operations cannot provide. One function in the toolkit does all of it.</p>
+
+    <div class="widget" data-widget="seedSources"></div>
+
+<pre><code>def seed_everything(seed, deterministic=True):
+    random.seed(seed); np.random.seed(seed)
+    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(deterministic, warn_only=True)
+    torch.backends.cudnn.benchmark = not deterministic           <span class="c"># benchmark picks kernels by timing: fast, and a source of drift</span>
+    return torch.Generator().manual_seed(seed)                   <span class="c"># for DataLoader(..., generator=g)</span>
+
+g = seed_everything(123); a = MLP(4, (8,)); g = seed_everything(123); b = MLP(4, (8,))
+all(torch.equal(p, q) for p, q in zip(a.parameters(), b.parameters()))   <span class="out">True</span></code></pre>
+
+    <h2 id="l17-config">Configs and fingerprints</h2>
+    <p>Everything that decides a result belongs in one frozen object: model, sizes, learning rate, epochs, regularization, data size, data seed, seed. Frozen, so a run cannot quietly mutate it; a dataclass, so it has a name for every field; serialised to JSON, so it can be committed and read back; and hashed, so each distinct configuration has an eight-character fingerprint. Two runs with the same fingerprint must give the same digits; two with different fingerprints are different experiments, even if the only field that changed is the seed.</p>
+<pre><code>@dataclass(frozen=True)
+class RunConfig:
+    model: str = "mlp"; hidden: tuple = (32, 32); lr: float = 0.01; epochs: int = 150
+    weight_decay: float = 0.0; dropout: float = 0.0; n_orders: int = 2000; data_seed: int = 0; seed: int = 0
+    def fingerprint(self):
+        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()[:8]
+
+RunConfig().fingerprint(), replace(RunConfig(), lr=0.02).fingerprint()   <span class="out">('1cf7a8b0', '108831ee')</span>
+RunConfig.from_json("run.json") == RunConfig()        <span class="out">True   tuples survive the trip</span></code></pre>
+
+    <h2 id="l17-log">The log: one line per run, forever</h2>
+    <p><code>run_experiment</code> takes a config and does the whole run from it, seeding first, and returns a result that carries the fingerprint, the metric, the epoch it came from, the seconds it took, the git commit and the time, plus every config field. Appended as one JSON line to <code>experiments.jsonl</code>, the log is append-only, greppable and diff-friendly, and <code>pandas</code> reads it in one call. Grouping by every field except the seed turns a pile of runs into a table of configurations with a mean and a spread.</p>
+
+    <div class="widget" data-widget="runLog"></div>
+
+<pre><code>a = run_experiment(RunConfig(), "experiments.jsonl"); b = run_experiment(RunConfig(), "experiments.jsonl")
+a["best_val"] == b["best_val"]                       <span class="out">True   7.5612 both times, 0.3 s each</span>
+
+compare(load_log("experiments.jsonl"))
+<span class="out">  model    hidden    lr  epochs  weight_decay  n_orders  runs  mean_val  std_val
+0   mlp  (64, 64)  0.01     150         0.000      2000     5     6.894    0.500
+1   mlp  (32, 32)  0.01     150         0.000      2000     7     7.681    0.209
+2   mlp  (32, 32)  0.01     150         0.001      2000     5     7.711    0.234</span></code></pre>
+
+    <h2 id="l17-noise">Seed noise: is the difference real?</h2>
+    <p>Run the same config under five seeds and the validation loss moves: 7.43 to 8.02 for the small network, a standard deviation of 0.24. That spread is the ruler for every comparison. The bigger network's mean is better by 0.84, more than three times the spread of a five-seed mean, so the improvement is real. Weight decay moved the mean by 0.02, a tenth of the spread: not an effect, a different seed. A single run per config cannot distinguish the two cases, and most "improvements" that vanish on rerun were exactly this.</p>
+
+    <div class="widget" data-widget="seedNoise"></div>
+
+<pre><code>repeat_with_seeds(RunConfig(), seeds=[0, 1, 2, 3, 4])
+<span class="out">{'values': [7.561, 7.432, 7.759, 7.868, 8.021], 'mean': 7.728, 'std': 0.236}</span>
+repeat_with_seeds(replace(RunConfig(), hidden=(64, 64)), seeds=[0, 1, 2, 3, 4])
+<span class="out">{'values': [6.583, 7.486, 7.390, 6.547, 6.464], 'mean': 6.894, 'std': 0.500}     real: 0.84 better, spread of the mean ≈ 0.25</span>
+repeat_with_seeds(replace(RunConfig(), weight_decay=1e-3), seeds=[0, 1, 2, 3, 4])["mean"]
+<span class="out">7.711                                                                              noise: 0.02 better, spread of the mean ≈ 0.15</span></code></pre>
+
+    <h2 id="l17-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="3" data-explain="Python's random, NumPy's, and torch's (which covers CPU and CUDA). Three libraries, three seeds." data-hint="Which libraries have their own generators?">
+      <div class="quiz-row"><span class="q">1. How many libraries' random generators does <code>seed_everything</code> seed?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="8" data-explain="The first eight hex characters of the SHA-256 of the sorted JSON: short enough to read, long enough never to collide in a log." data-hint="Count the characters of 1cf7a8b0.">
+      <div class="quiz-row"><span class="q">2. How many characters long is a config fingerprint?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="7.43" data-explain="(7.1 + 7.4 + 7.8) / 3." data-hint="Average the three.">
+      <div class="quiz-row"><span class="q">3. Three seeds give best validation losses 7.1, 7.4 and 7.8. What is the mean, to two decimals?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="2" data-explain="Run it twice: if the digits match, the run is pinned. One run proves nothing about reproducibility." data-hint="The minimum that lets you compare.">
+      <div class="quiz-row"><span class="q">4. What is the smallest number of runs that can show a config reproduces exactly?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="0.5" data-explain="0.1 / 0.2: the difference is half a standard deviation, well inside seed noise." data-hint="difference / std.">
+      <div class="quiz-row"><span class="q">5. Two configs differ by 0.1 in mean validation loss, and the std across seeds is 0.2. What is the ratio of difference to std?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="1" data-explain="Only the seed differs, so the fingerprints differ and compare() groups them together: the same configuration, measured twice." data-hint="Which fields of the two configs differ?">
+      <div class="quiz-row"><span class="q">6. <code>RunConfig(seed=0)</code> and <code>RunConfig(seed=1)</code>: how many fields differ?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l17-build">Build it</h2>
+    <p>One new file, <code>forkcast/experiments.py</code>. <code>git_commit</code> and <code>load_log</code> are provided; <code>seed_everything</code>, <code>RunConfig</code>'s methods, <code>run_experiment</code>, <code>compare</code> and <code>repeat_with_seeds</code> are yours. Every run uses Lesson 5's <code>fit_with_validation</code> on the nonlinear orders from Lesson 4, so the whole lesson takes seconds on a CPU.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 17 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson17.ipynb" href="#lesson-17/build">Open lesson17.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>seed_everything</code> and prove it</h3>
+        <p>Two seeded <code>MLP</code>s with equal weights, two seeded loaders with the same shuffle order, and a different seed that breaks both. Then check <code>torch.are_deterministic_algorithms_enabled()</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write the <code>RunConfig</code> methods</h3>
+<pre><code>cfg = exp.RunConfig(hidden=(16, 16), lr=0.005, seed=3)
+cfg.to_json("run.json"); exp.RunConfig.from_json("run.json") == cfg   <span class="out">True</span>
+cfg.fingerprint(), replace(cfg, lr=0.01).fingerprint()                <span class="out">two different 8-character strings</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>run_experiment</code> and run it twice</h3>
+<pre><code>a = exp.run_experiment(exp.RunConfig(), "experiments.jsonl")
+b = exp.run_experiment(exp.RunConfig(), "experiments.jsonl")
+a["best_val"] == b["best_val"]                       <span class="out">True</span>
+!head -c 300 experiments.jsonl</code></pre>
+        <p class="expect">Expected: identical digits. If they differ, something in the run is unseeded; the widget above lists the suspects in the usual order.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>repeat_with_seeds</code> and <code>compare</code>, then run the three experiments</h3>
+        <p>Five seeds each for the default config, <code>hidden=(64, 64)</code> and <code>weight_decay=1e-3</code>, all logged, then <code>compare(load_log(...))</code>. Read the table the way the page does: which difference is real, which is noise.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: a stray random call</h3>
+        <p>Add <code>random.shuffle</code> on a copy of the training indices inside a run <em>before</em> <code>seed_everything</code>, and run the default config twice. The digits no longer match, and nothing warns you. Then move the shuffle after the seeding and watch them match again. This is the whole lesson in two runs.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Reproduce a number from the course</h3>
+        <p>Lesson 5's page quotes a best validation loss for the plain MLP on 40 training points. Express that run as a <code>RunConfig</code> (you will need to add an <code>n_train</code> field or a small subclass), run it, and see how close you land. Where you do not match exactly, find which source of randomness the page's run did not pin; that investigation is the skill.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the tests, then the whole course one last time</h3>
+<pre><code>!pytest tests/test_17.py -q
+<span class="out">7 passed in 2.0s</span>
+!pytest -m fast -q
+<span class="out">125 passed, 1 skipped, 1 deselected in 41.5s      skipped = the GPU test</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 17: experiment hygiene"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l17-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>Two runs with the same config give different digits</dt>
+      <dd>An unseeded source. Check in order: a <code>DataLoader</code> without <code>generator</code>, a <code>random</code> or NumPy call before seeding, data generated outside the seeded region, dropout with the model seeded after the data. On a GPU, non-deterministic kernels.</dd>
+
+      <dt>RuntimeError: … does not have a deterministic implementation</dt>
+      <dd><code>use_deterministic_algorithms(True)</code> without <code>warn_only=True</code> turns an unavailable deterministic kernel into an error. The toolkit warns instead; read the warning, and know that operation is not pinned.</dd>
+
+      <dt>FrozenInstanceError: cannot assign to field 'seed'</dt>
+      <dd>The config is frozen on purpose. <code>dataclasses.replace(cfg, seed=1)</code> makes a new one.</dd>
+
+      <dt>from_json returns a config that is not equal to the original</dt>
+      <dd>JSON has no tuples: <code>hidden</code> came back as a list. Convert it on the way in.</dd>
+
+      <dt>compare() shows one row per run instead of per config</dt>
+      <dd>The seed, or a per-run field like <code>seconds</code> or <code>timestamp</code>, is in the group keys. Group by the configuration fields only, with <code>hidden</code> as a string so it is hashable.</dd>
+
+      <dt>The fingerprint changes between machines for the same config</dt>
+      <dd>Float formatting or key order in the JSON. <code>sort_keys=True</code>, and keep floats as plain Python floats, not NumPy scalars.</dd>
+    </dl>
+
+    <h2 id="l17-stretch">Stretch</h2>
+    <p>Make <code>run_experiment</code> write Lesson 8's checkpoint and TensorBoard logs into a directory named by the fingerprint, so every run leaves a complete trail. Then add a small <code>tools/sweep.py</code> that takes a base config and a list of overrides, runs each under three seeds, and prints the <code>compare</code> table; that script, and the discipline of reading its <code>std_val</code> column before believing its <code>mean_val</code> column, is most of what a research engineer does all day.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-16"><span class="dir">Previous</span><span class="title">Lesson 16: Capstone, multimodal Forkcast</span></a>
+      <a class="next" href="#home"><span class="dir">The course</span><span class="title">Back to the syllabus</span></a>
+    </nav>
+  </main>
+</article>

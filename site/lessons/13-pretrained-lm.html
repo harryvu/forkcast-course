@@ -1,0 +1,266 @@
+<!-- Lesson 13: Pretrained language models. Section ids are prefixed l13-; rail links use #lesson-13/<section>. -->
+<article class="page" data-lesson="13" data-title="Pretrained language models" id="lesson-13" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-13/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-13/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-13/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-13/tokenizer" data-section="tokenizer">Subword tokenizers</a></li>
+        <li><a href="#lesson-13/module" data-section="module">A model is a module</a></li>
+        <li><a href="#lesson-13/finetune" data-section="finetune">Fine-tuning gently</a></li>
+        <li><a href="#lesson-13/embeddings" data-section="embeddings">Sentence embeddings</a></li>
+        <li><a href="#lesson-13/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-13/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-13/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-13/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">13</div>
+      <div>
+        <h1>Pretrained language models</h1>
+        <p class="meta">Part 3, Language. About 2.5 hours. GPU runtime for the real model. <b>You'll leave with</b> Lesson 9's move applied to text: a Transformer that has already read a great deal, fine-tuned on Forkcast's reviews, and a menu search that understands "something spicy with noodles".</p>
+      </div>
+    </div>
+
+    <section id="l13-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Explain subword tokenization and use a pretrained tokenizer's <code>input_ids</code> and <code>attention_mask</code>.</li>
+        <li>Treat a Hugging Face model as the <code>nn.Module</code> it is: call it, read its outputs, pass it to the toolkit's ideas.</li>
+        <li>Fine-tune a pretrained Transformer with a small learning rate, gradient clipping and gradient accumulation.</li>
+        <li>Turn sentences into unit vectors by mean pooling and rank a menu by cosine similarity.</li>
+        <li>Say why a pretrained model beats Lesson 12's from-scratch Transformer on real reviews.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>AutoTokenizer / AutoModel</code></li><li><code>model(**batch)</code></li><li><code>out.loss, out.logits, out.last_hidden_state</code></li><li><code>torch.optim.AdamW</code></li>
+        <li><code>clip_grad_norm_</code></li><li><code>gradient accumulation</code></li><li><code>F.normalize</code></li><li><code>topk</code></li><li><code>return_tensors="pt"</code></li>
+      </ul>
+    </section>
+
+    <section id="l13-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l13-dod-tests" data-dod="tests">
+          <label for="l13-dod-tests">The Lesson 13 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_13.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l13-dod-fast" data-dod="fast">
+          <label for="l13-dod-fast">Everything so far still passes: <code>97 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l13-dod-quiz" data-dod-auto="quiz">
+          <label for="l13-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l13-dod-push" data-dod="push">
+          <label for="l13-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 13 is done. Forkcast can read reviews and search menus by meaning.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l13-project">Where we are</h2>
+    <p>Lesson 12's Transformer learned word order from 40,000 reviews and gained a little over the bag. Lesson 9 showed the alternative for images: start from a network that has already learned to see. The same is true for text, more so. DistilBERT, a 66-million-parameter encoder trained on Wikipedia and books, already knows that "overpriced" is negative and "unbelievably" intensifies what follows; fine-tuning teaches it what Forkcast's customers mean by a one-star review in an hour on a free GPU. The second thing a pretrained encoder gives you is an embedding for any sentence, which turns menu search from matching words into matching meaning. The tests use a toy DistilBERT with random weights and a tokenizer trained on the bundled reviews, so they download nothing; the notebook uses the real models.</p>
+
+    <h2 id="l13-tokenizer">Subword tokenizers</h2>
+    <p>Lesson 11's vocabulary had one id for every unseen word, and "overpriced" was unseen. A <em>subword</em> tokenizer learns a vocabulary of pieces, whole common words plus fragments, and splits any word into the longest pieces it knows: "over" + "##priced". Nothing is ever unknown, rare words simply cost more tokens, and a 30,522-piece vocabulary covers all of English. The tokenizer also adds a <code>[CLS]</code> token at the start and <code>[SEP]</code> at the end, pads, and returns the attention mask you built by hand last lesson. A pretrained model's tokenizer is part of the model: the ids must mean what the weights expect.</p>
+
+    <div class="widget" data-widget="subwordDemo"></div>
+
+<pre><code>tok = AutoTokenizer.from_pretrained("distilbert-base-uncased")      <span class="c"># the real one; tests train a 310-piece one on our reviews</span>
+enc = tok(["Overpriced forkcast pizza, soggy fries!", "Cold."], padding=True, truncation=True, max_length=32, return_tensors="pt")
+enc["input_ids"].shape, enc["attention_mask"].shape   <span class="out">(torch.Size([2, 18]), torch.Size([2, 18]))</span>
+tok.convert_ids_to_tokens(enc["input_ids"][0])
+<span class="out">['[CLS]', 'over', '##p', '##ri', '##c', '##ed', 'for', '##k', '##c', '##ast', 'pizza', ',', 'soggy', 'fri', '##e', '##s', '!', '[SEP]']   the toy tokenizer</span></code></pre>
+
+    <h2 id="l13-module">A pretrained model is an nn.Module</h2>
+    <p>Everything in the <code>transformers</code> library is a PyTorch module. <code>AutoModel.from_pretrained</code> downloads the weights once and returns an encoder you can call; <code>AutoModelForSequenceClassification</code> adds a fresh classification head, Lesson 9's "replace the head" done for you. The forward call takes the tokenizer's dict unpacked, <code>model(**batch)</code>, and returns an object: <code>last_hidden_state</code> of shape <span class="shape">(<b class="dim-n">N</b>, <b class="dim-s">T</b>, 768)</span> from the encoder, <code>logits</code> from a classifier, and, when <code>labels</code> are in the batch, the cross-entropy <code>loss</code> computed for you. The toolkit's loop needs one adaptation, a batch that is a dict rather than a tuple, which is what <code>fit_lm</code> is.</p>
+<pre><code>model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=5)
+count_parameters(model)                              <span class="out">66,957,317   of which 3,845 are the new head</span>
+out = model(**batch)                                 <span class="c"># batch: input_ids, attention_mask, labels</span>
+out.logits.shape, out.loss                           <span class="out">(torch.Size([32, 5]), tensor(1.63, grad_fn=&lt;NllLossBackward0&gt;))</span></code></pre>
+
+    <h2 id="l13-finetune">Fine-tuning gently</h2>
+    <p>Three habits protect a pretrained model while it learns your task. A learning rate around <code>2e-5</code> with <code>AdamW</code>: fifty times smaller than the <code>1e-3</code> that trained your own models, because these weights are already good and one bold step can wreck them. <em>Gradient clipping</em>, which rescales the gradients when their combined norm exceeds a limit, usually 1.0, so a single odd batch cannot produce a giant step. And <em>gradient accumulation</em>, which lets several small batches add their gradients before one optimizer step, so a model whose activations fill the GPU at batch size 8 still trains with the stability of batch size 32. Lesson 2 showed gradients accumulate when nothing zeroes them; here that becomes a feature.</p>
+
+    <div class="widget" data-widget="accumulationDemo"></div>
+
+<pre><code>def clip_and_step(model, optimizer, max_grad_norm):
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)   <span class="c"># rescale, return the norm found</span>
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+    return float(norm)
+
+for i, batch in enumerate(train_loader):
+    out = model(**{k: v.to(device) for k, v in batch.items()})
+    (out.loss / accumulation_steps).backward()       <span class="c"># gradients add up; the division keeps the scale of a mean</span>
+    if (i + 1) % accumulation_steps == 0:
+        clip_and_step(model, optimizer, 1.0)
+
+history = fit_lm(tiny, train_loader, val_loader, epochs=3, lr=1e-3, accumulation_steps=2)
+history["steps"], history["val_acc"]                 <span class="out">(30, [0.481, 0.575, 1.0])   20 batches per epoch, one step per two batches</span></code></pre>
+
+    <h2 id="l13-embeddings">Sentence embeddings and search by meaning</h2>
+    <p>The encoder's <code>last_hidden_state</code> is one vector per token. Mean-pool it over the real tokens, Lesson 11's masked mean, and you have one vector per sentence; normalise it to unit length and the dot product of two such vectors is the cosine of the angle between them: 1 for identical meaning, near 0 for unrelated. Embed every menu item once, store the matrix, and a query becomes one matrix-vector product. Encoders trained specifically for this, such as the MiniLM sentence-transformers, give much better neighbours than a plain DistilBERT, and the notebook uses one.</p>
+
+    <div class="widget" data-widget="cosineSearch"></div>
+
+<pre><code>embeddings = embed_texts(encoder, tok, menu)         <span class="out">torch.Size([5, 32]) for the toy encoder; (5, 384) for MiniLM</span>
+embeddings.norm(dim=1)                               <span class="out">tensor([1., 1., 1., 1., 1.])</span>
+search("spicy chicken ramen with egg", menu, embeddings, encoder, tok, k=3)
+<span class="out">[('spicy chicken ramen with soft egg', 0.944), ('green curry with jasmine rice', 0.661), ('crispy fish tacos', 0.497)]   toy weights: shared pieces win</span></code></pre>
+
+    <h2 id="l13-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="32" data-explain="Four micro-batches of 8 add their gradients before one step: the optimizer sees 32 reviews." data-hint="micro-batch × accumulation_steps.">
+      <div class="quiz-row"><span class="q">1. The loader's batch size is 8 and <code>accumulation_steps=4</code>. What is the effective batch size per optimizer step?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="0.25" data-explain="clip_grad_norm_ multiplies every gradient by max_norm / total_norm = 1 / 4 when the norm exceeds the limit." data-hint="What factor brings a norm of 4 down to 1?">
+      <div class="quiz-row"><span class="q">2. The gradients' total norm is 4.0 and <code>max_grad_norm=1.0</code>. By what factor are they scaled?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="768" data-explain="DistilBERT's hidden size: every token comes out as 768 numbers, and so does the mean-pooled sentence." data-hint="The last dimension of last_hidden_state.">
+      <div class="quiz-row"><span class="q">3. What is the size of DistilBERT's hidden vectors?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="12" data-explain="[CLS], the ten word pieces, [SEP]." data-hint="Two special tokens are added.">
+      <div class="quiz-row"><span class="q">4. A review tokenizes into 10 word pieces. How many ids does the tokenizer return for it (before padding)?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="1" data-explain="Identical unit vectors point the same way; their dot product is 1." data-hint="cos(0).">
+      <div class="quiz-row"><span class="q">5. What is the cosine similarity between a sentence's embedding and itself?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="50" data-explain="1e-3 / 2e-5 = 50. The pretrained weights are a resource; fine-tuning spends it slowly." data-hint="Divide.">
+      <div class="quiz-row"><span class="q">6. Your own models trained at <code>lr=1e-3</code>; fine-tuning uses <code>2e-5</code>. How many times smaller is that?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l13-build">Build it</h2>
+    <p>One new file, <code>forkcast/lm.py</code>. The toy tokenizer and toy models are provided; <code>encode_batch</code>, <code>ClassificationCollator</code>, <code>mean_pool</code>, <code>embed_texts</code>, <code>search</code>, <code>clip_and_step</code> and <code>fit_lm</code> are yours. The notebook runs every function on the real models.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 13 notebook on a GPU runtime and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson13.ipynb" href="#lesson-13/build">Open lesson13.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>encode_batch</code> and look at the pieces</h3>
+        <p>Tokenize two reviews with the toy tokenizer and with <code>distilbert-base-uncased</code>; compare how each splits "overpriced". Check the first id is <code>[CLS]</code>, the mask is 1 on real pieces, and the short review is padded with the pad id.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>ClassificationCollator</code></h3>
+        <p>A <code>DataLoader</code> over <code>(text, label)</code> pairs with this collate yields dicts with <code>input_ids</code>, <code>attention_mask</code> and <code>labels</code>. Pass one to a model and read <code>out.loss</code> and <code>out.logits.shape</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>mean_pool</code>, <code>embed_texts</code> and <code>search</code></h3>
+<pre><code>enc = lm.tiny_encoder(tok.vocab_size)
+emb = lm.embed_texts(enc, tok, menu)
+emb.shape, emb.norm(dim=1)                           <span class="out">(torch.Size([5, 32]), tensor([1., 1., 1., 1., 1.]))</span>
+lm.search("spicy chicken ramen with egg", menu, emb, enc, tok, k=3)[0]   <span class="out">('spicy chicken ramen with soft egg', 0.944)</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>clip_and_step</code> and <code>fit_lm</code>, then fine-tune the toy model</h3>
+<pre><code>torch.manual_seed(0)
+tiny = lm.tiny_distilbert(tok.vocab_size, num_labels=2)
+history = lm.fit_lm(tiny, train_loader, val_loader, epochs=3, lr=1e-3, accumulation_steps=2)
+history["steps"], [round(a, 3) for a in history["val_acc"]]   <span class="out">(30, [0.481, 0.575, 1.0])</span></code></pre>
+        <p class="expect">Expected: 20 batches per epoch become 10 optimizer steps each, and the toy model learns the templated reviews by the third epoch. The learning rate is <code>1e-3</code> here because these weights are random; the real model gets <code>2e-5</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Fine-tune the real DistilBERT on star ratings</h3>
+        <p>The notebook streams 10,000 Yelp reviews with their 1-to-5 star ratings, loads <code>distilbert-base-uncased</code> with <code>num_labels=5</code>, and runs <code>fit_lm</code> for one epoch at <code>2e-5</code> with batch 16 and <code>accumulation_steps=2</code>, about ten minutes on a T4. Five-star prediction is hard, since 3 and 4 stars read alike; expect accuracy well above the 20% of chance and a mean absolute error well under one star. Compare with Lesson 12's Transformer trained on the same reviews from scratch.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Search the menu by meaning</h3>
+        <p>Load <code>sentence-transformers/all-MiniLM-L6-v2</code> with <code>AutoModel</code>, embed a menu of forty dishes, and query it with phrases that share no words with the dish names: "something spicy with noodles", "a light vegetarian lunch". Then compare the top-3 with plain <code>distilbert-base-uncased</code>; the difference is what training for embeddings buys.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: fine-tune at <code>1e-3</code></h3>
+        <p>Run one epoch of the real model at the learning rate you used for your own networks. The loss jumps, accuracy collapses toward chance and stays there: the pretrained features are gone after a few hundred steps. Lesson 9's lesson, in another modality.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_13.py -q
+<span class="out">7 passed in 5.1s</span>
+!pytest -m fast -q
+<span class="out">97 passed, … skipped, 1 deselected in 26.3s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 13: pretrained language models"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l13-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>TypeError: forward() got an unexpected keyword argument 'labels'</dt>
+      <dd>You passed a classification batch to the bare encoder (<code>AutoModel</code>). The encoder has no head and computes no loss; use <code>AutoModelForSequenceClassification</code>, or drop <code>labels</code> from the batch.</dd>
+
+      <dt>IndexError: index out of range in self  (from the embedding layer)</dt>
+      <dd>Ids from one tokenizer fed to a model trained with another. Tokenizer and model must come from the same checkpoint.</dd>
+
+      <dt>torch.OutOfMemoryError: CUDA out of memory</dt>
+      <dd>Halve the loader's batch size and double <code>accumulation_steps</code>; the effective batch and the result stay the same. Also lower <code>max_length</code>: attention memory grows with the square of the sequence length.</dd>
+
+      <dt>Loss climbs and accuracy falls to chance within the first epoch</dt>
+      <dd>Learning rate too high for pretrained weights. <code>2e-5</code>, with warmup if the run is long.</dd>
+
+      <dt>Search returns the same three dishes for every query</dt>
+      <dd>The embeddings were not normalised, so the dot product favours whichever vectors are longest. <code>F.normalize(dim=-1)</code> before storing them.</dd>
+
+      <dt>ValueError: Asking to pad but the tokenizer does not have a padding token</dt>
+      <dd>Some tokenizers ship without one. Set <code>tok.pad_token = tok.eos_token</code> (or <code>tok.add_special_tokens({"pad_token": "[PAD]"})</code> and resize the model's embeddings).</dd>
+    </dl>
+
+    <h2 id="l13-stretch">Stretch</h2>
+    <p>Add a linear warmup to <code>fit_lm</code> with <code>transformers.get_linear_schedule_with_warmup</code> and compare the first-epoch curve with and without. Then freeze DistilBERT's encoder, train only its head on cached mean-pooled embeddings, Lesson 9's trick, and measure how much of the fine-tuned accuracy you keep for one percent of the compute.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-12"><span class="dir">Previous</span><span class="title">Lesson 12: Attention from scratch to Transformer</span></a>
+      <a class="next" href="#lesson-14"><span class="dir">Next</span><span class="title">Lesson 14: Recommendations</span></a>
+    </nav>
+  </main>
+</article>

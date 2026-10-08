@@ -1,0 +1,302 @@
+<!-- Lesson 12: Attention from scratch to Transformer. Section ids are prefixed l12-; rail links use #lesson-12/<section>. -->
+<article class="page" data-lesson="12" data-title="Attention from scratch to Transformer" id="lesson-12" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-12/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-12/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-12/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-12/order" data-section="order">Order matters</a></li>
+        <li><a href="#lesson-12/attention" data-section="attention">Attention</a></li>
+        <li><a href="#lesson-12/positions" data-section="positions">Positions</a></li>
+        <li><a href="#lesson-12/encoder" data-section="encoder">The encoder layer</a></li>
+        <li><a href="#lesson-12/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-12/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-12/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-12/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">12</div>
+      <div>
+        <h1>Attention from scratch to Transformer</h1>
+        <p class="meta">Part 3, Language. About 2.5 hours. GPU optional. <b>You'll leave with</b> attention written in six lines and checked against PyTorch's, an understanding of why it needs positions, and a small Transformer that reads word order.</p>
+      </div>
+    </div>
+
+    <section id="l12-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Show, with a dataset, exactly where a bag of embeddings fails: sentences made of the same words in a different order.</li>
+        <li>Implement scaled dot-product attention by hand, with a key mask, and match <code>F.scaled_dot_product_attention</code>.</li>
+        <li>Explain why attention alone is order-blind and add sinusoidal positional encoding as a buffer.</li>
+        <li>Assemble a Transformer encoder classifier from <code>nn.TransformerEncoderLayer</code> and read every shape.</li>
+        <li>Train it to 100% on the order-sensitive reviews that hold the bag at 50%.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>F.scaled_dot_product_attention</code></li><li><code>q @ k.transpose(-2, -1)</code></li><li><code>masked_fill(-inf)</code></li><li><code>torch.softmax(dim=-1)</code></li>
+        <li><code>register_buffer</code></li><li><code>nn.TransformerEncoderLayer(batch_first=True)</code></li><li><code>nn.TransformerEncoder</code></li><li><code>src_key_padding_mask</code></li><li><code>nn.MultiheadAttention</code></li><li><code>nn.LayerNorm</code></li>
+      </ul>
+    </section>
+
+    <section id="l12-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l12-dod-tests" data-dod="tests">
+          <label for="l12-dod-tests">The Lesson 12 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_12.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l12-dod-fast" data-dod="fast">
+          <label for="l12-dod-fast">Everything so far still passes: <code>90 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l12-dod-quiz" data-dod-auto="quiz">
+          <label for="l12-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l12-dod-push" data-dod="push">
+          <label for="l12-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 12 is done. You have built the layer that every large language model is made of.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l12-project">Where we are</h2>
+    <p>Lesson 11's bag of embeddings reads a review as a pile of words, and for most reviews that is enough. It is not enough for the ones Forkcast cares about most: the complaint that reads "the pho was good, not bad" and the praise that reads "the pho was bad, not good" contain exactly the same words. A model that forgets order cannot tell them apart, however long it trains. This lesson builds the mechanism that lets a token's meaning depend on the tokens around it: attention, plus a way to know where each token sits. It is the same mechanism inside every modern language model, at a size you can read in one screen.</p>
+
+    <h2 id="l12-order">Order matters, and the bag cannot see it</h2>
+    <p>The repository ships a generator of twin reviews: every positive template has a negative twin with the identical words rearranged. On this data a bag of embeddings is not merely weak; it has a hard ceiling. Its pooled vector for the two twins is the same vector, so whatever the classifier decides, it decides for both.</p>
+
+    <div class="widget" data-widget="orderDemo"></div>
+
+<pre><code>texts, labels = make_negation_reviews(6, seed=0)
+<span class="out">('the rider was great , the tacos not terrible', 1)   ('the rider was terrible , the tacos not great', 0)
+('the lasagna was good , not bad .', 1)               ('the lasagna was bad , not good .', 0)</span>
+
+train_loader, val_loader, vocab = negation_loaders()   <span class="c"># Lesson 11's pipeline; 29 tokens in the vocabulary</span>
+bag = BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+train.fit_v2(bag, train_loader, val_loader, epochs=15, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+<span class="out">validation accuracy 0.50, validation loss 0.693 = ln 2: the loss of a coin toss, and it cannot go lower</span></code></pre>
+
+    <h2 id="l12-attention">Attention: every token looks at every other token</h2>
+    <p>Give each token three vectors made from its embedding by three linear maps: a <em>query</em> (what am I looking for), a <em>key</em> (what do I offer) and a <em>value</em> (what I pass on if chosen). Token <em>i</em>'s query is dotted with every token's key, giving one score per token; a softmax turns the scores into weights that sum to one; and token <em>i</em>'s output is the weighted sum of all the values. Every token does this at once, so the whole thing is two matrix multiplications and a softmax. The division by <code>√d</code> keeps the scores from growing with the vector size, which would saturate the softmax. Padded tokens get a score of minus infinity before the softmax, so their weight is exactly zero.</p>
+
+    <div class="widget" data-widget="attentionHeatmap"></div>
+
+<pre><code>def scaled_dot_product(q, k, v, key_mask=None):
+    d = q.shape[-1]
+    scores = q @ k.transpose(-2, -1) / math.sqrt(d)                 <span class="c"># (N, T, T)</span>
+    if key_mask is not None:
+        scores = scores.masked_fill(~key_mask[:, None, :], float("-inf"))   <span class="c"># never look at padding</span>
+    weights = torch.softmax(scores, dim=-1)                         <span class="c"># rows sum to 1</span>
+    return weights @ v, weights                                     <span class="c"># (N, T, d), (N, T, T)</span>
+
+out, w = scaled_dot_product(q, k, v)
+torch.allclose(out, F.scaled_dot_product_attention(q, k, v), atol=1e-5)   <span class="out">True   PyTorch's fused kernel computes the same thing, faster</span></code></pre>
+    <p>In practice the model runs several attentions in parallel, each on a slice of the dimensions: <em>heads</em>. <code>nn.MultiheadAttention</code> does the three linear maps, the split into heads, the attention and the final mix in one module; with <code>d_model=32</code> and <code>nhead=2</code>, each head works in 16 dimensions.</p>
+
+    <h2 id="l12-positions">Attention is order-blind; positions fix it</h2>
+    <p>Look again at the formula: nothing in it knows where a token is. Shuffle the sentence and each token's output is unchanged, because the set of keys and values it attends to is the same set. Attention on its own is a bag with extra steps. The fix is to add position information to the embeddings before the first layer: a fixed pattern of sines and cosines at different frequencies, one row per position, so that nearby positions get similar codes and any two positions get different ones. It is a lookup table that never trains, which is what <code>register_buffer</code> is for: state that moves with the model and saves with it, but has no gradient.</p>
+<pre><code>class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=512):
+        super().__init__()
+        position = torch.arange(max_len).unsqueeze(1)                                   <span class="c"># (max_len, 1)</span>
+        div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))    <span class="c"># (d_model / 2,)</span>
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div)
+        pe[0, :, 1::2] = torch.cos(position * div)
+        self.register_buffer("pe", pe)
+    def forward(self, x):
+        return x + self.pe[:, : x.shape[1]]
+
+pe = PositionalEncoding(32)
+pe.pe.shape, sum(p.numel() for p in pe.parameters()), "pe" in pe.state_dict()   <span class="out">(torch.Size([1, 512, 32]), 0, True)</span></code></pre>
+
+    <h2 id="l12-encoder">The encoder layer, and the model</h2>
+    <p>A Transformer encoder layer is attention followed by Lesson 4's MLP applied to each token, with two additions that make deep stacks trainable: a <em>residual connection</em> that adds each block's input back to its output, and <em>LayerNorm</em> that rescales each token's vector. The shape <span class="shape">(<b class="dim-n">N</b>, <b class="dim-s">T</b>, <b class="dim-d">d_model</b>)</span> never changes, so layers stack. <code>nn.TransformerEncoderLayer</code> is one such layer; <code>nn.TransformerEncoder</code> repeats it.</p>
+
+    <div class="widget" data-widget="encoderStack"></div>
+
+<pre><code>class TinyTransformer(nn.Module):
+    def __init__(self, vocab_size, d_model=32, nhead=2, num_layers=1, dim_feedforward=64, dropout=0.1, n_classes=2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
+        self.positions = PositionalEncoding(d_model)
+        layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+        self.encoder = nn.TransformerEncoder(layer, num_layers, enable_nested_tensor=False)
+        self.head = nn.Linear(d_model, n_classes)
+    def forward(self, ids, mask):
+        x = self.positions(self.embedding(ids))                       <span class="c"># (N, T, d_model)</span>
+        x = self.encoder(x, src_key_padding_mask=~mask)               <span class="c"># True means "ignore": the opposite of our mask</span>
+        m = mask.unsqueeze(-1).to(x.dtype)
+        pooled = (x * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)     <span class="c"># (N, d_model)</span>
+        return self.head(pooled)
+
+model = TinyTransformer(len(vocab))
+count_parameters(model)                              <span class="out">9538</span>
+train.fit_v2(model, train_loader, val_loader, epochs=25, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+<span class="out">validation accuracy 1.00; the loss is near zero by epoch 5</span></code></pre>
+    <p>Same data, same pooling, same head as the bag. The difference is that by the time the pooling happens, "good" after "not" and "good" before a comma have become different vectors, because attention let each token read its neighbours and the positional codes told it which neighbours were which.</p>
+
+    <h2 id="l12-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="8, 20, 20" data-explain="One weight for every (query token, key token) pair, per sequence in the batch." data-hint="Rows are queries, columns are keys, both T long.">
+      <div class="quiz-row"><span class="q">1. A batch of 8 sequences of 20 tokens. What is the shape of the attention <code>weights</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="1" data-explain="The softmax over the key dimension makes each query's weights a probability distribution." data-hint="What does a softmax guarantee about each row?">
+      <div class="quiz-row"><span class="q">2. What does each row of the attention weights sum to?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="8" data-explain="√64 = 8. Dot products of 64-dimensional vectors are about 8 times larger than of 1-dimensional ones; dividing keeps the softmax soft." data-hint="The square root of d.">
+      <div class="quiz-row"><span class="q">3. Keys and queries have 64 dimensions. What are the scores divided by?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="16" data-explain="d_model is split evenly across the heads: 64 / 4." data-hint="d_model / nhead.">
+      <div class="quiz-row"><span class="q">4. <code>d_model=64, nhead=4</code>. How many dimensions does each head attend over?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="0" data-explain="A score of minus infinity becomes exp(−inf) = 0 after the softmax: padding is never looked at." data-hint="What is exp(−∞)?">
+      <div class="quiz-row"><span class="q">5. A key is padding and gets a score of −inf. What is its attention weight after the softmax?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="0" data-explain="The buffer is fixed: sines and cosines computed once. It is saved and moved with the model but has no gradient." data-hint="register_buffer, not nn.Parameter.">
+      <div class="quiz-row"><span class="q">6. How many trainable parameters does <code>PositionalEncoding(d_model=32)</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l12-build">Build it</h2>
+    <p>One new file, <code>forkcast/attention.py</code>. The twin-review generator and loaders are provided; <code>scaled_dot_product</code>, <code>PositionalEncoding</code> and <code>TinyTransformer</code> are yours.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 12 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson12.ipynb" href="#lesson-12/build">Open lesson12.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Watch the bag hit its ceiling</h3>
+        <p>Load the twin reviews, print a few pairs, train Lesson 11's <code>BagOfEmbeddings</code> for 15 epochs and confirm validation accuracy 0.50 and loss 0.693. This is the baseline the rest of the lesson beats.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>scaled_dot_product</code></h3>
+<pre><code>q, k, v = torch.randn(2, 5, 8), torch.randn(2, 5, 8), torch.randn(2, 5, 8)
+out, w = attention.scaled_dot_product(q, k, v)
+w.sum(dim=-1)                                        <span class="out">tensor([[1., 1., 1., 1., 1.], [1., 1., 1., 1., 1.]])</span>
+torch.allclose(out, F.scaled_dot_product_attention(q, k, v), atol=1e-5)   <span class="out">True</span>
+
+key_mask = torch.tensor([[True, True, True, False, False]])
+_, w = attention.scaled_dot_product(q[:1], k[:1], v[:1], key_mask)
+w[0, :, 3:]                                          <span class="out">all zeros: the padded keys are invisible</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>PositionalEncoding</code> and look at it</h3>
+<pre><code>pe = attention.PositionalEncoding(32, max_len=50)
+plt.imshow(pe.pe[0].T, aspect="auto", cmap="RdBu"); plt.xlabel("position"); plt.ylabel("dimension");</code></pre>
+        <p class="expect">Expected: stripes that oscillate fast in the first dimensions and slowly in the last: every position gets a unique pattern, and neighbouring positions get similar ones.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>TinyTransformer</code>, then prove it sees order and ignores padding</h3>
+<pre><code>model = attention.TinyTransformer(vocab_size=50, d_model=16, nhead=2, dropout=0.0).eval()
+ids = torch.tensor([[5, 6, 7, 8]]); swapped = torch.tensor([[5, 8, 7, 6]])
+torch.allclose(model(ids, ids != 0), model(swapped, swapped != 0))     <span class="out">False   order changes the output</span>
+padded = torch.tensor([[5, 6, 7, 8, 0, 0]])
+torch.allclose(model(ids, ids != 0), model(padded, padded != 0), atol=1e-5)   <span class="out">True    padding does not</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Train it on the twins</h3>
+<pre><code>torch.manual_seed(0)
+model = attention.TinyTransformer(len(vocab), d_model=32, nhead=2, num_layers=1, dim_feedforward=64)
+train.fit_v2(model, train_loader, val_loader, epochs=25, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+<span class="out">validation accuracy 1.00</span></code></pre>
+        <p>Then run <code>scaled_dot_product</code> on the trained embeddings of one review and plot the 9×9 weight matrix with the tokens as labels. Find the row for "not".</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: remove the positions</h3>
+        <p>Subclass <code>TinyTransformer</code> with <code>self.positions = nn.Identity()</code> and retrain. Accuracy falls back to 50%: attention without positions is permutation-blind, and the twins are permutations of each other. The positional encoding is not decoration; it is the only thing in the model that knows what "before" means.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Real reviews again</h3>
+        <p>The notebook trains <code>TinyTransformer(d_model=64, nhead=4, num_layers=2)</code> on the 40,000 Yelp reviews from Lesson 11, next to the bag. Expect a modest gain over the bag's 90%, not a leap: Yelp sentiment is mostly in the words. The leap comes next lesson, from a Transformer that has read the whole internet first.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_12.py -q
+<span class="out">7 passed in 3.8s</span>
+!pytest -m fast -q
+<span class="out">90 passed, … skipped, 1 deselected in 20.1s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 12: attention and a tiny Transformer"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l12-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>The model trains fine but every padded sequence gives nan</dt>
+      <dd>A row of the mask is all False, so every key is −inf and the softmax is 0/0. Every sequence needs at least one real token; the toolkit's <code>clamp_min</code> protects the pooling, not the attention.</dd>
+
+      <dt>Validation accuracy is 50% with the Transformer too</dt>
+      <dd>Either the positional encoding is missing or not added in <code>forward</code>, or <code>src_key_padding_mask</code> was passed as <code>mask</code> instead of <code>~mask</code> (True means ignore, so you told the encoder to ignore the real tokens).</dd>
+
+      <dt>AssertionError: embed_dim must be divisible by num_heads</dt>
+      <dd><code>d_model / nhead</code> must be a whole number: 32 with 2 or 4 heads, not 3.</dd>
+
+      <dt>RuntimeError: the batch dimension is in the wrong place (shape errors inside the encoder)</dt>
+      <dd>Forgot <code>batch_first=True</code>: the default layout is <span class="shape">(T, N, d)</span>. Everything in this course is batch first.</dd>
+
+      <dt>PositionalEncoding has no attribute 'pe' after loading a checkpoint</dt>
+      <dd>The table was stored as a plain attribute instead of a buffer, so it was never saved. <code>register_buffer</code>.</dd>
+
+      <dt>Attention weights do not sum to 1</dt>
+      <dd>Softmax over the wrong dimension. The sum over keys, the last dimension of <span class="shape">(N, T, T)</span>, must be 1 for each query.</dd>
+    </dl>
+
+    <h2 id="l12-stretch">Stretch</h2>
+    <p>Replace the sinusoidal table with a learned one, <code>nn.Embedding(max_len, d_model)</code> indexed by position, and compare; most modern models learn their positions. Then write a <em>causal</em> mask, an upper-triangular matrix of −inf that stops token <em>i</em> from attending to tokens after it, and verify that output <em>i</em> no longer changes when you edit token <em>i+1</em>. That one mask is the difference between an encoder and the decoder inside every chat model.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-11"><span class="dir">Previous</span><span class="title">Lesson 11: Text as tensors</span></a>
+      <a class="next" href="#lesson-13"><span class="dir">Next</span><span class="title">Lesson 13: Pretrained language models</span></a>
+    </nav>
+  </main>
+</article>

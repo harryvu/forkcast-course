@@ -1,0 +1,281 @@
+<!-- Lesson 14: Recommendations. Section ids are prefixed l14-; rail links use #lesson-14/<section>. -->
+<article class="page" data-lesson="14" data-title="Recommendations" id="lesson-14" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-14/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-14/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-14/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-14/tastes" data-section="tastes">Tastes as vectors</a></li>
+        <li><a href="#lesson-14/implicit" data-section="implicit">Implicit feedback</a></li>
+        <li><a href="#lesson-14/ranking" data-section="ranking">Ranking metrics</a></li>
+        <li><a href="#lesson-14/model" data-section="model">What it learned</a></li>
+        <li><a href="#lesson-14/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-14/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-14/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-14/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">14</div>
+      <div>
+        <h1>Recommendations</h1>
+        <p class="meta">Part 3, Language, last lesson. About 2 hours. No GPU needed. <b>You'll leave with</b> a recommender that learns what each customer likes from nothing but their order history, and the metric that tells you whether it beats "show everyone the popular places".</p>
+      </div>
+    </div>
+
+    <section id="l14-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Frame recommendation as learning a vector for every user and every restaurant so that their dot product predicts orders.</li>
+        <li>Build matrix factorization from two <code>nn.Embedding</code> tables plus biases, and score every restaurant for a batch of users in one matrix product.</li>
+        <li>Train on implicit feedback with sampled negatives and a binary cross-entropy loss.</li>
+        <li>Evaluate with leave-one-out hit rate at k, against the popularity baseline.</li>
+        <li>Check what the model learned against the hidden tastes that generated the data.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>F.binary_cross_entropy_with_logits</code></li><li><code>nn.Parameter</code></li><li><code>nn.init.normal_</code></li><li><code>torch.multinomial</code></li>
+        <li><code>Tensor.topk(dim=1)</code></li><li><code>torch.corrcoef</code></li><li><code>embedding.weight.T</code></li><li><code>masking with -inf</code></li>
+      </ul>
+    </section>
+
+    <section id="l14-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l14-dod-tests" data-dod="tests">
+          <label for="l14-dod-tests">The Lesson 14 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_14.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l14-dod-fast" data-dod="fast">
+          <label for="l14-dod-fast">Everything so far still passes: <code>104 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l14-dod-quiz" data-dod-auto="quiz">
+          <label for="l14-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l14-dod-push" data-dod="push">
+          <label for="l14-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 14 is done, and so is Part 3. Forkcast predicts, sees, reads and recommends; Part 4 ships it.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l14-project">Where we are</h2>
+    <p>Forkcast knows what every customer has ordered. Opening the app should show each of them the restaurants they are most likely to order from next, including places they have never seen. There is no text to read and no photo to look at, just a table of (customer, restaurant) pairs, and from that alone a model can learn that people who order from Pho Saigon also like Ramen Lab. The mechanism is the embedding table once more, this time with two of them, and the dot product between a user's row and a restaurant's row as the prediction. The orders here are synthetic and generated from hidden taste vectors, so at the end you can check what the model recovered.</p>
+
+    <h2 id="l14-tastes">Tastes as vectors</h2>
+    <p>Give every user a vector and every restaurant a vector in the same space, and let the score for a pair be their dot product plus a bias for the user (orders a lot), a bias for the restaurant (popular) and one global offset. Training moves the vectors so that pairs that happened score high and pairs that did not score low. Nobody tells the model what the dimensions mean, but after training they are tastes: one direction might separate spicy from mild, another light from hearty, and a user's vector points toward what they order. This is <em>matrix factorization</em>, and a user's recommendations are the restaurants their vector points at that they have not tried.</p>
+
+    <div class="widget" data-widget="latentMap"></div>
+
+<pre><code>class MatrixFactorization(nn.Module):
+    def __init__(self, n_users, n_items, dim=16):
+        super().__init__()
+        self.user_vec, self.item_vec = nn.Embedding(n_users, dim), nn.Embedding(n_items, dim)
+        self.user_bias, self.item_bias = nn.Embedding(n_users, 1), nn.Embedding(n_items, 1)
+        self.global_bias = nn.Parameter(torch.zeros(1))
+        for table in (self.user_vec, self.item_vec):
+            nn.init.normal_(table.weight, std=0.05)                   <span class="c"># small start: early scores near zero</span>
+    def forward(self, users, items):                                   <span class="c"># (N,), (N,) -> (N,)</span>
+        dot = (self.user_vec(users) * self.item_vec(items)).sum(dim=1)
+        return dot + self.user_bias(users).squeeze(1) + self.item_bias(items).squeeze(1) + self.global_bias
+    def score_all(self, users):                                        <span class="c"># (N,) -> (N, n_items): every restaurant at once</span>
+        return self.user_vec(users) @ self.item_vec.weight.T + self.user_bias(users) + self.item_bias.weight.T + self.global_bias
+
+count_parameters(MatrixFactorization(300, 120))      <span class="out">7141   300×16 + 120×16 + 300 + 120 + 1</span></code></pre>
+    <p><code>score_all</code> is Lesson 2's <code>X @ w</code> grown up: a batch of user vectors times the whole restaurant table gives every score in one matrix product, which is what makes ranking the entire catalogue for a million users feasible.</p>
+
+    <h2 id="l14-implicit">Implicit feedback and negatives</h2>
+    <p>The order table only records what happened. There is no row saying "customer 42 would hate Burger Barn", only silence, and silence mostly means they never saw it. Training therefore uses each real order as a positive example and, for each one, draws a random restaurant the customer has not ordered from as a weak negative. The loss is binary cross-entropy with logits: push the positive score toward "yes", the negative toward "no". Some negatives are wrong, a place they would love, but with thousands of orders the real signal wins.</p>
+
+    <div class="widget" data-widget="negativeSampling"></div>
+
+<pre><code>for users, positives in loader:                      <span class="c"># the (user, item) pairs that happened</span>
+    negatives = sample_negatives(users, n_items, seen)   <span class="c"># one unordered restaurant per positive</span>
+    optimizer.zero_grad()
+    loss = F.binary_cross_entropy_with_logits(model(users, positives), torch.ones(len(users))) + \
+           F.binary_cross_entropy_with_logits(model(users, negatives), torch.zeros(len(users)))
+    loss.backward(); optimizer.step()
+
+<span class="out">epoch losses: 1.369, 1.159, 0.738, 0.569, 0.497, 0.432   (every second epoch of twelve)</span></code></pre>
+
+    <h2 id="l14-ranking">Ranking metrics: hit rate at k</h2>
+    <p>Accuracy means nothing here; the model never says yes or no, it ranks. The honest test is Lesson 5's split per user: hide each customer's most recent order, rank every restaurant they have not tried, and ask whether the hidden one is in the top k. The fraction of users for whom it is, is <em>hit rate at k</em>. It has a floor, random guessing gives about k over the number of unseen restaurants, and a baseline that every recommender must beat before it is worth deploying: rank by popularity alone.</p>
+
+    <div class="widget" data-widget="hitRateDemo"></div>
+
+<pre><code>frame, user_factors, item_factors = make_order_history()   <span class="c"># 300 users × 20 distinct restaurants, 120 restaurants</span>
+train, test = leave_one_out(frame)                   <span class="out">5700 training orders, 300 held-out ones, one per user</span>
+seen = seen_items(train)
+
+popularity_hit_rate(train, test, seen, k=10)         <span class="out">0.103   barely above random (10 of 100 unseen restaurants)</span>
+hit_rate_at_k(untrained_model, test, seen, k=10)     <span class="out">0.080</span>
+hit_rate_at_k(trained_model, test, seen, k=10)       <span class="out">0.557   after twelve epochs; 0.377 at k=5, 0.770 at k=20</span></code></pre>
+
+    <h2 id="l14-model">What the model learned</h2>
+    <p>Because the orders were generated from hidden taste vectors, you can compare. Normalise the learned restaurant vectors, compute every pairwise cosine similarity, do the same for the hidden factors, and correlate the two matrices: 0.88 in the sandbox. The model was shown nothing but order pairs and reconstructed the geometry that produced them. The same comparison on a real system would be your product team's opinion of which restaurants are alike; the model's answer is usually close and occasionally surprising.</p>
+<pre><code>nearest_restaurants(model, item=7, k=5)              <span class="out">[0, 34, 53, 14, 3]</span>
+<span class="c"># by the hidden tastes the generator used:</span>        <span class="out">[4, 0, 53, 110, 3]   three of five shared</span>
+
+scores = model.score_all(torch.tensor([0]))          <span class="c"># user 0, who ordered from 4, 6, 7, 14, 19, 26, 34, 37, …</span>
+scores[0, list(seen[0])] = float("-inf")
+scores.topk(5).indices                               <span class="out">tensor([[ 70, 116,  54, 112,  42]])   the held-out order was 116: a hit</span></code></pre>
+
+    <h2 id="l14-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="300, 16" data-explain="One row per user, dim numbers per row." data-hint="(n_users, dim).">
+      <div class="quiz-row"><span class="q">1. What is the weight shape of <code>user_vec</code> in <code>MatrixFactorization(300, 120, dim=16)</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="64, 120" data-explain="(64, 16) @ (16, 120): one score for every restaurant, for each of the 64 users." data-hint="A batch of user vectors times the transposed restaurant table.">
+      <div class="quiz-row"><span class="q">2. <code>score_all</code> for a batch of 64 users with 120 restaurants. What shape comes out?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="11" data-explain="1·3 + 2·4. The dot product is the score before the biases." data-hint="Multiply matching entries, add.">
+      <div class="quiz-row"><span class="q">3. A user vector [1, 2] and a restaurant vector [3, 4]. What is their dot product?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="512" data-explain="256 positives and 256 sampled negatives, each scored once: two BCE terms over 256 pairs each." data-hint="One negative per positive.">
+      <div class="quiz-row"><span class="q">4. A batch holds 256 (user, item) positives and one negative is sampled per positive. How many (user, item) pairs does the model score in that step?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="0.3" data-explain="Hits divided by users: 30 / 100." data-hint="A fraction of users.">
+      <div class="quiz-row"><span class="q">5. Of 100 users, 30 have their held-out restaurant in the top 10. What is hit rate at 10?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="0.1" data-explain="A random top-10 out of 100 candidates contains the held-out restaurant one time in ten: the floor any model must clear." data-hint="k over the number of candidates.">
+      <div class="quiz-row"><span class="q">6. A user has 100 unseen restaurants. If you recommended 10 at random, what hit rate at 10 would you expect?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l14-build">Build it</h2>
+    <p>One new file, <code>forkcast/recsys.py</code>. The order generator, the leave-one-out split, the seen-items index and the popularity baseline are provided; <code>MatrixFactorization</code>, <code>sample_negatives</code>, <code>train_one_epoch_rec</code>, <code>hit_rate_at_k</code> and <code>nearest_restaurants</code> are yours.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 14 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson14.ipynb" href="#lesson-14/build">Open lesson14.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Generate the order history and split it</h3>
+<pre><code>frame, user_factors, item_factors = recsys.make_order_history()
+train, test = recsys.leave_one_out(frame)
+seen = recsys.seen_items(train)
+len(train), len(test), train["item"].value_counts().head(3).tolist()   <span class="out">(5700, 300, [122, 113, 108])</span>
+recsys.popularity_hit_rate(train, test, seen, k=10)   <span class="out">0.103</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>MatrixFactorization</code></h3>
+        <p>Five parameter groups, a forward over pairs, a <code>score_all</code> over the whole table. Check that <code>score_all(users)[range(N), items]</code> equals <code>forward(users, items)</code>, and that an untrained model's hit rate is near the random floor.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>sample_negatives</code> and <code>train_one_epoch_rec</code>, then train</h3>
+<pre><code>torch.manual_seed(0)
+model = recsys.MatrixFactorization(300, 120, dim=16)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-2, weight_decay=1e-5)
+loader = recsys.make_rec_loader(train)
+losses = [recsys.train_one_epoch_rec(model, loader, optimizer, 120, seen) for _ in range(12)]
+[round(v, 3) for v in losses[::2]]                  <span class="out">[1.369, 1.159, 0.738, 0.569, 0.497, 0.432]</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>hit_rate_at_k</code> and compare with the baseline</h3>
+<pre><code>[round(recsys.hit_rate_at_k(model, test, seen, k), 3) for k in (5, 10, 20)]   <span class="out">[0.377, 0.557, 0.77]</span></code></pre>
+        <p class="expect">Expected: five times the popularity baseline at k=10. Then plot hit rate against k for both: the learned curve should sit well above the popularity curve everywhere.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>nearest_restaurants</code> and check against the hidden tastes</h3>
+<pre><code>learned = F.normalize(model.item_vec.weight.detach(), dim=1); truth = F.normalize(item_factors, dim=1)
+torch.corrcoef(torch.stack([(learned @ learned.T).flatten(), (truth @ truth.T).flatten()]))[0, 1]   <span class="out">0.883</span>
+recsys.nearest_restaurants(model, 7, k=5)            <span class="out">[0, 34, 53, 14, 3]</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Recommend for one user</h3>
+        <p>Pick a user, list what they ordered, mask those restaurants with <code>-inf</code> and print the top five, then the held-out item. Do it for a few users; some will be hits, some near misses at rank 12, and that spread is what hit rate summarises.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: forget to mask the seen items</h3>
+        <p>Evaluate <code>hit_rate_at_k</code> without the <code>-inf</code> masking. The top of every list fills with restaurants the user already ordered from, the held-out item is pushed down, and the metric collapses, even though the model is unchanged. A recommender that re-recommends what you just bought is the most common bug in the field, and it is a two-line fix.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_14.py -q
+<span class="out">7 passed in 3.0s</span>
+!pytest -m fast -q
+<span class="out">104 passed, … skipped, 1 deselected in 24.0s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 14: recommendations"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l14-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>Hit rate is near zero and never improves</dt>
+      <dd>The test items are also in the training set and you mask seen items, so the answer is hidden from the ranking; or the split was not per user. Leave one order out <em>per user</em> and keep it out of <code>seen</code>.</dd>
+
+      <dt>Hit rate collapses after a few epochs while the loss still falls</dt>
+      <dd>Overfitting the item biases or the vectors: add <code>weight_decay</code>, lower <code>dim</code>, or stop early on the hit rate rather than the loss.</dd>
+
+      <dt>RuntimeError: The size of tensor a (64) must match the size of tensor b (120)</dt>
+      <dd>The biases in <code>score_all</code> are the wrong way round: the user bias is <span class="shape">(N, 1)</span>, the item bias must be <span class="shape">(1, n_items)</span>, which is <code>item_bias.weight.T</code>.</dd>
+
+      <dt>Every user gets the same five recommendations</dt>
+      <dd>The item bias has taken over and the vectors are tiny: too much weight decay, or a learning rate too low to move the vectors. Also check the negatives are per user; sampling the same negatives for everyone teaches nothing personal.</dd>
+
+      <dt>sample_negatives returns restaurants the user ordered from</dt>
+      <dd>The seen sets were built from the frame after the split, or keyed by the wrong column. <code>seen_items(train)</code>, keyed by user.</dd>
+
+      <dt>Loss sits at 1.386 and does not move</dt>
+      <dd>Two BCE terms at chance: 2 × ln 2. The vectors were initialised at zero or the optimizer is not updating the embedding tables; check <code>model.parameters()</code> was passed, not a copy.</dd>
+    </dl>
+
+    <h2 id="l14-stretch">Stretch</h2>
+    <p>Replace the BCE pair loss with a <em>ranking</em> loss: for each positive and negative, <code>-F.logsigmoid(score_pos - score_neg)</code>, which asks only that the ordered restaurant score higher than the sampled one. Compare hit rate. Then make it a two-tower model: feed the user's Lesson 6 features (zone, time of day) through a small MLP to produce the user vector instead of looking it up, so a brand-new customer with no orders still gets a recommendation.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-13"><span class="dir">Previous</span><span class="title">Lesson 13: Pretrained language models</span></a>
+      <a class="next" href="#lesson-15"><span class="dir">Next</span><span class="title">Lesson 15: Serving</span></a>
+    </nav>
+  </main>
+</article>

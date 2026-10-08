@@ -1,0 +1,289 @@
+<!-- Lesson 11: Text as tensors. Section ids are prefixed l11-; rail links use #lesson-11/<section>. -->
+<article class="page" data-lesson="11" data-title="Text as tensors" id="lesson-11" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-11/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-11/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-11/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-11/tokens" data-section="tokens">Tokens and ids</a></li>
+        <li><a href="#lesson-11/padding" data-section="padding">Padding and masks</a></li>
+        <li><a href="#lesson-11/embed" data-section="embed">Embeddings for words</a></li>
+        <li><a href="#lesson-11/model" data-section="model">The model</a></li>
+        <li><a href="#lesson-11/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-11/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-11/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-11/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">11</div>
+      <div>
+        <h1>Text as tensors</h1>
+        <p class="meta">Part 3, Language. About 2 hours. GPU optional. <b>You'll leave with</b> the pipeline that turns a sentence into a tensor, the mask that keeps padding honest, and a sentiment model that reads Forkcast reviews.</p>
+      </div>
+    </div>
+
+    <section id="l11-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Tokenize text and build a vocabulary with reserved ids for padding and unknown words, from the training set only.</li>
+        <li>Encode reviews as id tensors, pad a batch to one length, and build the mask that marks the real tokens.</li>
+        <li>Use <code>nn.Embedding</code> for words, with <code>padding_idx</code>, and pool a variable number of token vectors into one with a masked mean.</li>
+        <li>Train a bag-of-embeddings sentiment classifier with the toolkit, and read every shape from <span class="shape">(<b class="dim-n">N</b>, <b class="dim-s">T</b>)</span> to logits.</li>
+        <li>Say what the bag throws away, which is the problem Lesson 12 solves.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>nn.Embedding(padding_idx=)</code></li><li><code>pad_sequence(batch_first=True)</code></li><li><code>DataLoader(collate_fn=)</code></li><li><code>boolean masks</code></li>
+        <li><code>mask.unsqueeze(-1)</code></li><li><code>.clamp_min</code></li><li><code>collections.Counter</code></li><li><code>re.findall</code></li>
+      </ul>
+    </section>
+
+    <section id="l11-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l11-dod-tests" data-dod="tests">
+          <label for="l11-dod-tests">The Lesson 11 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_11.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l11-dod-fast" data-dod="fast">
+          <label for="l11-dod-fast">Everything so far still passes: <code>83 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l11-dod-quiz" data-dod-auto="quiz">
+          <label for="l11-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l11-dod-push" data-dod="push">
+          <label for="l11-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 11 is done. Text is tensors now; the next two lessons give the model a sense of order.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l11-project">Where we are</h2>
+    <p>Forkcast customers leave reviews, and the app wants to know, without a person reading each one, whether a review is happy or not: to flag a restaurant with a bad week, to surface the dish people love, to catch a rider problem early. Pictures became tensors in Lesson 7; today text does. The bundled file is a small <em>templated</em> corpus of delivery reviews so the tests run offline; the notebook trains the same model on hundreds of thousands of real Yelp reviews.</p>
+
+    <h2 id="l11-tokens">Tokens and ids</h2>
+    <p>A model consumes numbers, so a review has to become a sequence of integers. <em>Tokenizing</em> splits the text into units, here lower-cased words and a few punctuation marks. A <em>vocabulary</em> assigns each distinct token an id, most frequent first, with two ids reserved: 0 for padding, 1 for any token that was not in the training reviews. Build the vocabulary from the training set only; a word that appears only in validation must map to <code>&lt;unk&gt;</code>, because that is exactly what will happen with a customer's review tomorrow.</p>
+
+    <div class="widget" data-widget="tokenizerDemo"></div>
+
+<pre><code>tokenize("Great food, FAST delivery!")             <span class="out">['great', 'food', ',', 'fast', 'delivery', '!']</span>
+
+vocab = Vocab([tokenize(t) for t in train_texts], min_freq=1)
+len(vocab), vocab.itos[:6]                           <span class="out">(87, ['&lt;pad&gt;', '&lt;unk&gt;', '.', 'the', 'was', 'and'])   the templated corpus is tiny</span>
+ids = vocab.encode(tokenize("The pad thai was delicious and the delivery was late. Mixed feelings!"))
+ids                                                  <span class="out">[3, 21, 22, 4, 57, 5, 3, 6, 4, 20, 2, 1, 1, 16]   two unknown words</span>
+vocab.decode(ids)[-4:]                               <span class="out">['.', '&lt;unk&gt;', '&lt;unk&gt;', '!']</span></code></pre>
+
+    <h2 id="l11-padding">Padding and masks</h2>
+    <p>Reviews have different lengths and tensors are rectangular. A batch is padded with id 0 to the length of its longest review, and a boolean <em>mask</em> records where the real tokens are. From here on, every operation that sums or averages over the token dimension must consult the mask, or the padding leaks into the result: a two-word review padded to twenty would have its meaning diluted ten-fold by zeros.</p>
+
+    <div class="widget" data-widget="padMask"></div>
+
+<pre><code>def pad_batch(sequences, pad_idx=0):
+    ids = pad_sequence(sequences, batch_first=True, padding_value=pad_idx)   <span class="c"># (N, T)</span>
+    mask = ids != pad_idx                                                    <span class="c"># (N, T) bool</span>
+    return ids, mask
+
+def collate_reviews(batch):                          <span class="c"># the DataLoader's collate_fn</span>
+    ids, labels = zip(*batch)
+    padded, mask = pad_batch(list(ids))
+    return padded, mask, torch.stack(labels)         <span class="c"># target last: the toolkit's convention</span>
+
+ids, mask, labels = next(iter(train_loader))
+ids.shape, mask.shape, mask.sum(dim=1)[:4]           <span class="out">(torch.Size([32, 18]), torch.Size([32, 18]), tensor([17,  9, 15, 17]))</span></code></pre>
+    <p>Lesson 6's <code>DataLoader</code> stacked items with its default collate, which only works when every item has the same shape. <code>collate_fn</code> is the hook for everything else: it receives the list of items and returns the batch, in whatever form the model wants. The toolkit's convention that the target comes last is what lets <code>fit_v2</code> call <code>model(ids, mask)</code> without knowing anything about text.</p>
+
+    <h2 id="l11-embed">Embeddings for words</h2>
+    <p>This is Lesson 6's <code>nn.Embedding</code> again, with a vocabulary of words instead of taxi zones: a table with one learned row per id. Two details are new. <code>padding_idx=0</code> keeps row 0 at zero and gives it no gradient, so padding contributes nothing even before the mask. And a review is many ids, so the lookup returns <span class="shape">(<b class="dim-n">N</b>, <b class="dim-s">T</b>, <b class="dim-d">D</b>)</span>: one vector per token. To classify the review you need one vector per review, and the simplest way is to average the token vectors, over the real tokens only.</p>
+<pre><code>emb = self.embedding(ids)                            <span class="c"># (N, T, D)</span>
+m = mask.unsqueeze(-1).to(emb.dtype)                 <span class="c"># (N, T, 1): 1.0 on real tokens</span>
+pooled = (emb * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)   <span class="c"># (N, D): divide by the real length, not by T</span></code></pre>
+
+    <h2 id="l11-model">The model: a bag of embeddings</h2>
+    <p>Embed, average, classify: the whole model. The average is called a <em>bag</em> because, like a bag of words, it forgets order: "the food was good, not the service" and "the service was good, not the food" produce the same vector. For sentiment that costs surprisingly little, since the words carry most of the signal, and the model trains in seconds. Lesson 12 is about what it costs when order matters.</p>
+
+    <div class="widget" data-widget="bagPipeline"></div>
+
+<pre><code>class BagOfEmbeddings(nn.Module):
+    def __init__(self, vocab_size, dim=64, hidden=64, n_classes=2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, dim, padding_idx=0)
+        self.head = nn.Sequential(nn.Linear(dim, hidden), nn.ReLU(), nn.Linear(hidden, n_classes))
+    def forward(self, ids, mask):
+        emb = self.embedding(ids)
+        m = mask.unsqueeze(-1).to(emb.dtype)
+        pooled = (emb * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)
+        return self.head(pooled)
+
+torch.manual_seed(0)
+model = BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+count_parameters(model)                              <span class="out">3906</span>
+history = train.fit_v2(model, train_loader, val_loader, epochs=8, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+[round(v, 3) for v in history["val"]]               <span class="out">[0.568, 0.263, 0.058, 0.017, 0.009, 0.005, 0.004, 0.003]</span></code></pre>
+    <p>Templated reviews are, by construction, trivially separable, and the model reaches 100% on them in two epochs. Real reviews are not: expect a bag-of-embeddings model to land around 90% on Yelp polarity, which is remarkable for a model that does not know what order the words came in.</p>
+
+    <h2 id="l11-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="5002, 64" data-explain="One row per id, including the two reserved ones, D numbers per row." data-hint="(vocabulary size, embedding dim), and the vocabulary includes the specials.">
+      <div class="quiz-row"><span class="q">1. The vocabulary has 5000 words plus the two specials. What is the weight shape of <code>nn.Embedding(len(vocab), 64)</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="32, 120" data-explain="One row per review, one column per position up to the longest review in the batch." data-hint="(N, T).">
+      <div class="quiz-row"><span class="q">2. A batch of 32 reviews whose longest has 120 tokens. What is the shape of <code>ids</code> after <code>pad_batch</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="32, 120, 64" data-explain="Every id is replaced by its 64-number row." data-hint="The embedding adds one dimension.">
+      <div class="quiz-row"><span class="q">3. Same batch through <code>nn.Embedding(len(vocab), 64)</code>. What shape comes out?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="32, 64" data-explain="The mean over T collapses the token dimension: one vector per review." data-hint="Which dimension does the pooling remove?">
+      <div class="quiz-row"><span class="q">4. After the masked mean over the tokens. What shape?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="7" data-explain="The mask has a True for each real token; the sum is the review's length, and it is what the masked mean divides by." data-hint="Count the real tokens, not the padded positions.">
+      <div class="quiz-row"><span class="q">5. A review of 7 tokens is padded to 10. What is <code>mask.sum()</code> for that row?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="0" data-explain="padding_idx tells the embedding that row 0 is padding: it stays at zero and never receives a gradient." data-hint="What does padding_idx do to that row during backward?">
+      <div class="quiz-row"><span class="q">6. After <code>loss.backward()</code>, what is the sum of the gradient on row 0 of an embedding built with <code>padding_idx=0</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l11-build">Build it</h2>
+    <p>One new file, <code>forkcast/text.py</code>. <code>load_reviews</code>, <code>ReviewsDataset</code> and <code>make_text_loaders</code> are provided; <code>tokenize</code>, <code>Vocab</code>, <code>pad_batch</code>, <code>collate_reviews</code> and <code>BagOfEmbeddings</code> are yours.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 11 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson11.ipynb" href="#lesson-11/build">Open lesson11.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>tokenize</code> and look at the reviews</h3>
+<pre><code>frame = text.load_reviews()
+frame.head(3)
+<span class="out">                                                                                    text  label
+0                             Delivery arrived cold; the green curry was tiny. One star.      0
+1            The pad thai was bland and the delivery was late again. Asked for a refund.      0
+2  Loved it! The pad thai was perfectly cooked, generous and still hot. Will order again.      1</span>
+text.tokenize(frame["text"][0])                      <span class="out">['delivery', 'arrived', 'cold', 'the', 'green', 'curry', 'was', 'tiny', '.', 'one', 'star', '.']</span></code></pre>
+        <p class="expect">Expected: the semicolon disappears (it is not in the token pattern), punctuation marks stand alone, and the reviews run 8 to 20 tokens, mean 14.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>Vocab</code></h3>
+        <p>Count tokens with <code>Counter</code>, keep those at or above <code>min_freq</code>, most common first, and prepend the two specials. Build it from the training split only, then encode a sentence with words the training set never saw and watch the 1s appear.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>pad_batch</code> and <code>collate_reviews</code>, then make loaders</h3>
+<pre><code>train_loader, val_loader = text.make_text_loaders(tr["text"], tr["label"], va["text"], va["label"], vocab, batch_size=32)
+ids, mask, labels = next(iter(train_loader))
+ids.shape, mask.dtype, labels.shape                  <span class="out">(torch.Size([32, 18]), torch.bool, torch.Size([32]))</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>BagOfEmbeddings</code> and prove the mask works</h3>
+<pre><code>model = text.BagOfEmbeddings(len(vocab), dim=16, hidden=16)
+short = torch.tensor([[5, 6, 7]]); padded = torch.tensor([[5, 6, 7, 0, 0, 0]])
+torch.allclose(model(short, short != 0), model(padded, padded != 0))   <span class="out">True   padding changes nothing</span>
+model.embedding.weight[0]                            <span class="out">tensor([0., 0., …])   row 0 is the pad row</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Train, and look at what the embeddings learned</h3>
+<pre><code>torch.manual_seed(0)
+model = text.BagOfEmbeddings(len(vocab), dim=32, hidden=32)
+train.fit_v2(model, train_loader, val_loader, epochs=8, lr=3e-3, loss_fn=nn.CrossEntropyLoss())
+<span class="out">validation accuracy 1.0 on the templated reviews</span></code></pre>
+        <p class="expect">Expected: perfect on the templated corpus, which tells you about the corpus, not the model. The real test is the next step.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Real reviews: Yelp polarity</h3>
+        <p>The notebook streams 40,000 Yelp reviews from the Hugging Face Hub, builds a vocabulary of the 20,000 most frequent tokens from the training part, truncates reviews to 200 tokens, and trains the same model for a few epochs. Expect validation accuracy near 90%. Then take the embedding table and list the nearest words to "delicious", "rude" and "overpriced" by cosine similarity: the model has sorted the vocabulary by sentiment without being told what a word means.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: drop the mask</h3>
+<pre><code>pooled_unmasked = emb.mean(dim=1)                    <span class="c"># divides by T, zeros included</span></code></pre>
+        <p>Replace the masked mean with a plain mean over T and retrain on Yelp. Accuracy falls, and short reviews fall hardest: a six-word rave padded to 200 becomes a vector 97% zero, indistinguishable from a six-word complaint. The mask is not a detail; it is how the model knows where the review ends.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_11.py -q
+<span class="out">7 passed in 3.2s</span>
+!pytest -m fast -q
+<span class="out">83 passed, … skipped, 1 deselected in 22.0s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 11: text as tensors"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l11-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: stack expects each tensor to be equal size, but got [12] at entry 0 and [17] at entry 1</dt>
+      <dd>The loader used the default collate on variable-length reviews. Pass <code>collate_fn=collate_reviews</code>.</dd>
+
+      <dt>IndexError: index out of range in self</dt>
+      <dd>An id at or above <code>len(vocab)</code> reached the embedding. The model was built with a smaller vocabulary than the one used to encode, or a vocabulary was rebuilt after the model.</dd>
+
+      <dt>RuntimeError: The size of tensor a (64) must match the size of tensor b (18) at non-singleton dimension 2</dt>
+      <dd>The mask was multiplied without <code>unsqueeze(-1)</code>: <span class="shape">(N, T, D)</span> times <span class="shape">(N, T)</span> does not broadcast; <span class="shape">(N, T, 1)</span> does. Lesson 0's rule.</dd>
+
+      <dt>Validation accuracy near 50% while training loss falls</dt>
+      <dd>Labels and reviews shuffled separately, or the validation reviews encoded with a different vocabulary than the training ones. One <code>Vocab</code>, built once, used everywhere.</dd>
+
+      <dt>Nearly every token is 1</dt>
+      <dd><code>min_freq</code> too high for a small corpus, or you encoded raw strings instead of token lists (<code>vocab.encode("hot")</code> iterates the characters). Encode <code>tokenize(text)</code>.</dd>
+
+      <dt>Loss is nan</dt>
+      <dd>A division by zero in the masked mean for an all-padding row. <code>clamp_min(1.0)</code> on the denominator; and check that no review tokenized to nothing.</dd>
+    </dl>
+
+    <h2 id="l11-stretch">Stretch</h2>
+    <p>Replace the embedding plus masked mean with <code>nn.EmbeddingBag(len(vocab), dim, mode="mean", padding_idx=0)</code>, which does both in one fused call, and compare speed and accuracy. Then try <code>max</code> pooling instead of the mean (set padded positions to a large negative number first) and look at which reviews each pooling gets right that the other gets wrong; max pooling finds the one decisive word, mean pooling weighs the whole review.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-10"><span class="dir">Previous</span><span class="title">Lesson 10: Debugging and interpreting models</span></a>
+      <a class="next" href="#lesson-12"><span class="dir">Next</span><span class="title">Lesson 12: Attention from scratch to Transformer</span></a>
+    </nav>
+  </main>
+</article>
