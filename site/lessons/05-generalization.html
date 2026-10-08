@@ -1,0 +1,311 @@
+<!-- Lesson 05: Generalization. Section ids are prefixed l05-; rail links use #lesson-05/<section>. -->
+<article class="page" data-lesson="05" data-title="Generalization" id="lesson-05" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-05/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-05/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-05/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-05/split" data-section="split">Three parts</a></li>
+        <li><a href="#lesson-05/overfit" data-section="overfit">Overfitting</a></li>
+        <li><a href="#lesson-05/early" data-section="early">Early stopping</a></li>
+        <li><a href="#lesson-05/regularize" data-section="regularize">Regularization</a></li>
+        <li><a href="#lesson-05/leaks" data-section="leaks">Leaks</a></li>
+        <li><a href="#lesson-05/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-05/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-05/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-05/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">5</div>
+      <div>
+        <h1>Generalization</h1>
+        <p class="meta">Part 1, Foundations. About 2 hours. No GPU needed. <b>You'll leave with</b> the habit that separates people who train models from people who fool themselves: never judge a model on the data it learned from.</p>
+      </div>
+    </div>
+
+    <section id="l05-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Split data into training, validation and test sets, and say what each one is for.</li>
+        <li>Produce overfitting on purpose and read it off two curves: training loss falling, validation loss rising.</li>
+        <li>Stop training when the validation loss stops improving, and keep the best weights rather than the last.</li>
+        <li>Apply weight decay and dropout, and explain what <code>model.train()</code> and <code>model.eval()</code> now change.</li>
+        <li>Spot the two classic leaks: statistics fitted on all the data, and splitting without shuffling.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.randperm(n, generator=)</code></li><li><code>nn.Dropout</code></li><li><code>weight_decay=</code></li><li><code>copy.deepcopy(state_dict())</code></li>
+        <li><code>model.train() / .eval() doing something</code></li><li><code>Tensor.argsort</code></li><li><code>index tensors X[idx]</code></li>
+      </ul>
+    </section>
+
+    <section id="l05-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l05-dod-tests" data-dod="tests">
+          <label for="l05-dod-tests">The Lesson 5 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_05.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l05-dod-fast" data-dod="fast">
+          <label for="l05-dod-fast">Everything so far still passes: <code>41 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l05-dod-quiz" data-dod-auto="quiz">
+          <label for="l05-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l05-dod-push" data-dod="push">
+          <label for="l05-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 5 is done. Every number you report from here on comes from data the model never trained on.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l05-project">Where we are</h2>
+    <p>Lesson 4 ended with a table where more parameters always meant lower loss, and a warning. Every loss in that table was measured on the deliveries the model trained on. Forkcast does not need a model that remembers past deliveries; it needs one that predicts the next one. This lesson is about measuring that, and about the three tools that improve it: more data, stopping in time, and regularization. It is the last lesson on synthetic data; from Lesson 6 the deliveries are real.</p>
+
+    <h2 id="l05-split">Three parts, three jobs</h2>
+    <p>Shuffle the rows, then cut them into three. The <em>training</em> set is what gradient descent sees. The <em>validation</em> set is for decisions: which model size, when to stop, which learning rate; you look at it often, so it slowly leaks into your choices. The <em>test</em> set is for one honest number at the very end, looked at once. The shuffle is not optional. Data as stored is usually ordered by something, time or distance or customer, and cutting it in stored order gives you parts that differ from each other in exactly the way you are trying to measure.</p>
+
+    <div class="widget" data-widget="splitBars"></div>
+
+<pre><code>def train_val_test_split(X, y, fractions=(0.7, 0.15, 0.15), seed=0):
+    n = X.shape[0]
+    perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed))   <span class="c"># a random order of the row indices</span>
+    n_train, n_val = round(n * fractions[0]), round(n * fractions[1])
+    idx_train, idx_val, idx_test = perm[:n_train], perm[n_train:n_train + n_val], perm[n_train + n_val:]
+    return (X[idx_train], y[idx_train]), (X[idx_val], y[idx_val]), (X[idx_test], y[idx_test])
+
+(X_tr, y_tr), (X_val, y_val), (X_te, y_te) = train_val_test_split(X, y)
+len(X_tr), len(X_val), len(X_te)                   <span class="out">(1400, 300, 300)</span>
+norm = Normalizer().fit(X_tr)                       <span class="c"># statistics from the training part only</span></code></pre>
+
+    <h2 id="l05-overfit">Overfitting</h2>
+    <p>Give a 4545-parameter network 40 deliveries and let it train for 800 epochs. The training loss falls to 1, below the noise in the data, which should already worry you: the model is explaining noise. The validation loss falls with it for a while, reaches 8.0 around epoch 288, then climbs to 9.3. From that epoch on, every step made the model better at these 40 deliveries and worse at every other delivery. That is <em>overfitting</em>, and the distance between the two curves is the <em>generalization gap</em>. Dial it in yourself: fewer deliveries and more units make it worse; more deliveries, fewer units and weight decay make it better.</p>
+
+    <div class="widget" data-widget="overfitLab"></div>
+
+    <p>The dotted line in the left panel is the rule that generated the data. A good model ends up near it; an overfitted one wiggles through the training points instead. You will not have the dotted line for real data, which is why the validation curve on the right is the one you watch.</p>
+
+    <h2 id="l05-early">Early stopping</h2>
+    <p>The validation curve has a minimum, and the model at that epoch is the best model you will get from this run. <code>fit_with_validation</code> evaluates after every epoch, keeps a copy of the weights whenever the validation loss improves, and, if you give it a <code>patience</code>, stops once the loss has gone <code>patience</code> epochs without improving. It then loads the best copy back into the model, so you get the model from the minimum, not the one from the end.</p>
+<pre><code>best_state = copy.deepcopy(model.state_dict())     <span class="c"># a snapshot: state_dict() alone is a live reference</span>
+for epoch in range(epochs):
+    history["train"].append(train_one_epoch(model, X_tr, y_tr, optimizer, loss_fn))
+    val_loss = evaluate(model, X_val, y_val, loss_fn)
+    history["val"].append(val_loss)
+    if val_loss &lt; history["best_val"]:
+        history["best_val"], history["best_epoch"] = val_loss, epoch
+        best_state = copy.deepcopy(model.state_dict())
+        since_best = 0
+    else:
+        since_best += 1
+        if patience is not None and since_best &gt;= patience:
+            break
+model.load_state_dict(best_state)</code></pre>
+    <p>On the 40-delivery problem with <code>patience=30</code>, training stops after 319 epochs with the model from epoch 288, validation loss 8.0, instead of running to 800 and handing back 9.3. The <code>deepcopy</code> matters: <code>state_dict()</code> returns references to the live parameters, so without the copy your "best" weights would silently keep training.</p>
+
+    <h2 id="l05-regularize">Regularization</h2>
+    <p>Early stopping limits how long a model can memorise. Regularization limits how easily it can. <em>Weight decay</em> adds a pull toward zero on every parameter each step, so the network must earn large weights with real signal; it is one argument to the optimizer. <em>Dropout</em> zeroes a random fraction of a layer's units on every training forward pass, so no unit can become indispensable and the network spreads what it knows. It is a layer, <code>nn.Dropout(p)</code>, placed after the activation. And it is the first thing in this course that behaves differently in <code>model.train()</code> and <code>model.eval()</code>: random masks while training, nothing at all while evaluating. The toolkit has been switching modes since Lesson 3; now it matters.</p>
+
+    <div class="widget" data-widget="dropoutDemo"></div>
+
+<pre><code>MLP(4, (64, 64), dropout=0.2).net
+<span class="out">Sequential(Linear(4, 64), ReLU(), Dropout(p=0.2), Linear(64, 64), ReLU(), Dropout(p=0.2), Linear(64, 1))</span>
+
+history = train.fit_with_validation(MLP(4, (64, 64), dropout=0.2), X_tr40, y_tr40, X_val, y_val,
+                                    epochs=800, lr=0.01, weight_decay=1e-2)
+history["best_val"], history["best_epoch"]         <span class="out">(5.81, 694)    the unregularized run bottomed out at 8.02</span>
+history["train"][-1]                               <span class="out">17.8   measured with dropout on: not comparable to the plain model's training loss</span></code></pre>
+    <p>Two things to notice. The regularized model's validation loss is better than the plain model's ever was, with the same 40 deliveries. And its training loss looks terrible, because <code>train_one_epoch</code> measures it with the dropout masks active; judge regularized models by their validation loss only. The dropout noise also makes the validation curve bumpier, so give <code>patience</code> more room when dropout is on.</p>
+
+    <h2 id="l05-leaks">Leaks</h2>
+    <p>A leak is anything that lets information from the validation or test set into training. Two happen constantly. Fitting the <code>Normalizer</code> on all the data before splitting: the test rows then shape the scaling the model trained with. The fix is the order of operations: split first, fit on the training part, transform the rest. And splitting without shuffling, as the widget above showed: on data sorted by distance, the test set is the twenty longest deliveries and the trained model scores a loss of 20 on it, three times its honest number, not because it is bad but because it was never shown anything like them.</p>
+
+    <h2 id="l05-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="300" data-explain="15% of 2000. The test set gets the remaining 300 after train and validation are cut." data-hint="0.15 × 2000.">
+      <div class="quiz-row"><span class="q">1. 2000 deliveries, split 70/15/15. How many are in the validation set?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="7.7" data-explain="Validation minus training. A gap this large with a training loss below the noise floor is overfitting." data-hint="How much worse is the model on data it has not seen?">
+      <div class="quiz-row"><span class="q">2. Training loss 2.1, validation loss 9.8. What is the generalization gap?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="52" data-explain="Ten epochs without improvement after epoch 42 means the check fires at epoch 52, and the model from epoch 42 is returned." data-hint="best epoch + patience.">
+      <div class="quiz-row"><span class="q">3. <code>patience=10</code>. The validation loss is lowest at epoch 42 and never improves again. At which epoch does training stop?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="25" data-explain="p is the probability each unit is zeroed on a training pass; the survivors are scaled by 1/(1 − p) so the layer's total stays the same size." data-hint="p is a probability per unit.">
+      <div class="quiz-row"><span class="q">4. In training mode, what percentage of a layer's units does <code>nn.Dropout(0.25)</code> zero on average?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="5.2" data-explain="Always the training statistics. Using the validation set's own mean would both leak and scale the two sets differently." data-hint="Which part of the data is the Normalizer allowed to learn from?">
+      <div class="quiz-row"><span class="q">5. Training distances have mean 5.2 km; validation distances have mean 5.6 km. Which mean do you subtract when normalizing the validation set?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="1" data-explain="In eval mode dropout is the identity: every unit passes through unchanged. PyTorch does its scaling at training time, so nothing needs to happen at evaluation." data-hint="What does model.eval() turn dropout into?">
+      <div class="quiz-row"><span class="q">6. After <code>model.eval()</code>, by what factor does a <code>Dropout</code> layer multiply its inputs?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l05-build">Build it</h2>
+    <p>A new file, <code>forkcast/split.py</code>, and additions to <code>forkcast/train.py</code> and <code>forkcast/model.py</code>. The notebook's <code>%%writefile</code> cells for the last two contain the reference solutions of Lessons 3 and 4 with the new pieces marked; keep your own versions if you prefer and add the new parts by hand.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 5 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson05.ipynb" href="#lesson-05/build">Open lesson05.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>train_val_test_split</code> and split the deliveries</h3>
+<pre><code>from forkcast.data import make_orders
+from forkcast.split import train_val_test_split
+from forkcast.preprocess import Normalizer
+X, y = make_orders(2000, seed=0, nonlinear=True)
+(X_tr, y_tr), (X_val, y_val), (X_te, y_te) = train_val_test_split(X, y, seed=0)
+len(X_tr), len(X_val), len(X_te)                   <span class="out">(1400, 300, 300)</span>
+norm = Normalizer().fit(X_tr)                       <span class="c"># training part only</span>
+Xn_tr, Xn_val, Xn_te = norm.transform(X_tr), norm.transform(X_val), norm.transform(X_te)</code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>fit_with_validation</code></h3>
+        <p>In the <code>train.py</code> cell, below <code>load</code>. The loop from the early-stopping section. Then run it on the full training set as a baseline:</p>
+<pre><code>from forkcast.model import MLP
+from forkcast import train
+torch.manual_seed(0)
+model = MLP(4, (32, 32))
+h = train.fit_with_validation(model, Xn_tr, y_tr, Xn_val, y_val, epochs=300, lr=0.01)
+h["train"][-1], h["val"][-1]                       <span class="out">(5.37, 5.71)   a small gap: healthy</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Overfit on purpose</h3>
+<pre><code>small = Normalizer().fit(X_tr[:40])                 <span class="c"># 40 deliveries, their own statistics</span>
+Xs, ys, Xs_val = small.transform(X_tr[:40]), y_tr[:40], small.transform(X_val)
+torch.manual_seed(0)
+h = train.fit_with_validation(MLP(4, (64, 64)), Xs, ys, Xs_val, y_val, epochs=800, lr=0.01)
+h["train"][-1], h["val"][-1], h["best_val"], h["best_epoch"]   <span class="out">(1.01, 9.27, 8.02, 288)</span>
+plt.plot(h["train"], label="train"); plt.plot(h["val"], label="validation"); plt.yscale("log"); plt.legend();</code></pre>
+        <p class="expect">Expected: the two curves part company around epoch 300 and keep diverging. The training loss below 4 is the tell: the data has noise of variance 4, so a loss below it means the model is fitting noise.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Stop early, then regularize</h3>
+        <p>Add <code>dropout</code> to <code>MLP</code> in the <code>model.py</code> cell: when <code>dropout &gt; 0</code>, append <code>nn.Dropout(dropout)</code> after each activation. Then:</p>
+<pre><code>torch.manual_seed(0)
+m = MLP(4, (64, 64))
+h = train.fit_with_validation(m, Xs, ys, Xs_val, y_val, epochs=800, lr=0.01, patience=30)
+len(h["val"]), h["best_epoch"], h["best_val"]      <span class="out">(319, 288, 8.02)   stopped 31 epochs after the best</span>
+train.evaluate(m, Xs_val, y_val, nn.MSELoss())     <span class="out">8.02               the model carries the best weights</span>
+
+torch.manual_seed(0)
+h = train.fit_with_validation(MLP(4, (64, 64), dropout=0.2), Xs, ys, Xs_val, y_val, epochs=800, lr=0.01, weight_decay=1e-2)
+h["best_val"], h["best_epoch"]                     <span class="out">(5.81, 694)</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Draw the learning curve</h3>
+<pre><code>for n in [50, 100, 200, 400, 800, 1400]:
+    nm = Normalizer().fit(X_tr[:n]); torch.manual_seed(0)
+    h = train.fit_with_validation(MLP(4, (32, 32)), nm.transform(X_tr[:n]), y_tr[:n], nm.transform(X_val), y_val,
+                                  epochs=300, lr=0.01, patience=30)
+    print(n, round(h["best_val"], 2))
+<span class="out">50 8.50   100 7.48   200 6.80   400 5.94   800 5.71   1400 5.71</span></code></pre>
+        <p class="expect">Expected: validation loss falls with training-set size and flattens near 5.7. The flat part says more data would not help this model much, and the remaining distance to the noise floor of 4 is the model's own limit. Both are things you want to know before spending a week collecting data.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: cut without shuffling</h3>
+<pre><code>order = X[:, 0].argsort()                           <span class="c"># sort the deliveries by distance</span>
+Xs_, ys_ = X[order], y[order]
+X_a, y_a, X_b, y_b = Xs_[:1400], ys_[:1400], Xs_[1700:], ys_[1700:]
+nm = Normalizer().fit(X_a); torch.manual_seed(0); m = MLP(4, (32, 32))
+train.fit_with_validation(m, nm.transform(X_a), y_a, nm.transform(Xs_[1400:1700]), ys_[1400:1700], epochs=300, lr=0.01)
+train.evaluate(m, nm.transform(X_b), y_b, nn.MSELoss())   <span class="out">20.19   the "test set" is every delivery over 8.6 km</span></code></pre>
+        <p>Three times the honest test loss, from a model that is perfectly fine. Nothing errored; the split was simply not random. Whenever a test score surprises you in either direction, check how the split was made before you check the model.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Report the test loss, once</h3>
+<pre><code>train.evaluate(model, Xn_te, y_te, nn.MSELoss())   <span class="out">5.65   for the baseline model from step 3</span></code></pre>
+        <p>This is the number you would put in a report. You looked at the validation set many times today; the test set, once.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_05.py -q
+<span class="out">7 passed in 4.1s</span>
+!pytest -m fast -q
+<span class="out">41 passed, … skipped, 1 deselected in 7.3s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 5: generalization"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l05-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>The "best" weights give the same loss as the last epoch</dt>
+      <dd><code>best_state = model.state_dict()</code> without <code>copy.deepcopy</code>. The dictionary holds references to the live parameters, which kept training. Copy it.</dd>
+
+      <dt>Validation loss is suspiciously close to the training loss, or better</dt>
+      <dd>Some validation rows are in the training set, or the Normalizer was fitted on all the data, or you evaluated on the training tensors by mistake. Check the split sizes and the order of operations.</dd>
+
+      <dt>Validation loss jumps around wildly between epochs</dt>
+      <dd>Normal with dropout and a small validation set. Judge by the best value, not the last, and give <code>patience</code> more room.</dd>
+
+      <dt>Training loss is much higher than validation loss</dt>
+      <dd>Not a bug: the training loss was measured with dropout active. Compare models on validation loss only.</dd>
+
+      <dt>Test loss much worse than validation loss</dt>
+      <dd>Either the split was not shuffled, or you tuned so many choices on the validation set that it stopped being unseen. The test set exists to catch exactly this.</dd>
+
+      <dt>RuntimeError: Error(s) in loading state_dict: Missing key(s)</dt>
+      <dd>You saved a model with dropout and are loading into one without (or the reverse). The architectures must match, dropout layers included, because the layer positions in <code>net</code> shift.</dd>
+    </dl>
+
+    <h2 id="l05-stretch">Stretch</h2>
+    <p>Repeat the overfitting experiment with five different <code>torch.manual_seed</code> values and plot all five validation curves; the best epoch moves, which is why early stopping is done per run and not by a fixed number. Then swap <code>torch.optim.Adam</code> for <code>torch.optim.AdamW</code> with the same <code>weight_decay</code> and compare: AdamW applies the decay directly to the weights instead of through the gradient, and for Adam-family optimizers it is the version that actually behaves like weight decay.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-04"><span class="dir">Previous</span><span class="title">Lesson 4: The first neural network</span></a>
+      <a class="next" href="#lesson-06"><span class="dir">Next</span><span class="title">Lesson 6: Dataset, DataLoader and categorical embeddings</span></a>
+    </nav>
+  </main>
+</article>

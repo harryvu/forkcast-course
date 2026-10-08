@@ -1,0 +1,92 @@
+<!-- The syllabus / home view. Lesson links are hashes handled by the router in course.js. -->
+<div class="page single" id="home">
+<main>
+    <section class="hero">
+      <div>
+        <h1>Deep learning and PyTorch, one delivery app at a time.</h1>
+        <p class="lede">Eighteen lessons that build the machine-learning backend of Forkcast, a food-delivery app: a delivery-time predictor, a dish-photo classifier, a review reader, a recommender, all behind one API. Written for developers who know Python and nothing about matrices yet.</p>
+        <p style="margin-top:1.4rem" class="btn-row">
+          <a class="btn" href="#lesson-00">Start with Lesson 0</a>
+          <a class="btn secondary" href="#syllabus">See the syllabus</a>
+        </p>
+      </div>
+      <div class="figure">
+        <div data-widget="shapeFigure" data-shape="(32, 4)" data-roles="n,d" data-labels="batch N,features d" aria-hidden="true"></div>
+        <p class="muted" style="margin:0.6rem 0 0.4rem;font-size:0.95rem">Colour means dimension. The same code is used in every diagram of the course:</p>
+        <ul class="legend">
+          <li><span class="swatch" style="background:var(--dim-n)"></span>batch N</li>
+          <li><span class="swatch" style="background:var(--dim-d)"></span>features d</li>
+          <li><span class="swatch" style="background:var(--dim-w)"></span>weights</li>
+          <li><span class="swatch" style="background:var(--dim-y)"></span>outputs</li>
+          <li><span class="swatch" style="background:var(--dim-c)"></span>channels C</li>
+          <li><span class="swatch" style="background:var(--dim-s)"></span>spatial H, W</li>
+        </ul>
+      </div>
+    </section>
+
+    <h2>How a lesson works</h2>
+    <ol class="how">
+      <li><b>Read and play</b><p>Each lesson page states its objectives, introduces one concept with live diagrams you can poke at, and asks you to predict shapes before you run anything.</p></li>
+      <li><b>Build in Colab</b><p>A button opens the lesson's notebook from your copy of the repository, and you write code into that copy, so the project grows with you from Lesson 0 to the capstone.</p></li>
+      <li><b>Prove it is done</b><p>Every lesson ends with a definition of done: commands whose output tells you whether you met the objectives, and a green check on GitHub when you push.</p></li>
+    </ol>
+
+    <section class="panel setup-inline" aria-labelledby="setup-title">
+      <h2 id="setup-title" style="margin-top:0">Point the links at your repository</h2>
+      <p>Once you have created your copy of the course on GitHub (Lesson 0, step 1), enter your GitHub user here. Every <em>Open in Colab</em> button and repository link on this site is built from it, and the setting is remembered in this browser.</p>
+      <div data-github-setup></div>
+    </section>
+
+    <section id="syllabus">
+      <div class="part">
+        <h2>Part 1. Foundations, on the delivery-time problem</h2>
+        <p class="part-blurb">You predict how long a Forkcast delivery will take. The data is synthetic at first, so you can check what the model learned against the truth, then real taxi trips. No GPU needed.</p>
+        <ol class="syllabus" start="0">
+          <li><span class="lnum">0</span><a href="#lesson-00">Setup and tensors<span class="desc">Your repository, the Colab workflow, shapes and broadcasting</span></a><span class="status" data-lesson-status="00">Not started</span></li>
+          <li><span class="lnum">1</span><a href="#lesson-01">Linear regression by hand<span class="desc">Predict delivery minutes from distance: loss, gradient as slope, gradient descent in plain code</span></a><span class="status" data-lesson-status="01">Not started</span></li>
+          <li><span class="lnum">2</span><a href="#lesson-02">Autograd and many features<span class="desc">backward(), the forgotten zero_grad, and a weighted sum becomes X @ w</span></a><span class="status" data-lesson-status="02">Not started</span></li>
+          <li><span class="lnum">3</span><a href="#lesson-03">nn.Module, nn.Linear and optimizers<span class="desc">A real model class, feature normalization, training loop v1</span></a><span class="status" data-lesson-status="03">Not started</span></li>
+          <li><span class="lnum">4</span><a href="#lesson-04">The first neural network<span class="desc">Hidden layers, ReLU and capacity, once a straight line stops working</span></a><span class="status" data-lesson-status="04">Not started</span></li>
+          <li><span class="lnum">5</span><a href="#lesson-05">Generalization<span class="desc">Train, validation and test splits, overfitting, early stopping, weight decay and dropout</span></a><span class="status" data-lesson-status="05">Not started</span></li>
+          <li><span class="lnum">6</span><a href="#lesson-06">Dataset, DataLoader and categorical embeddings<span class="desc">Real taxi trips as delivery ETAs, mini-batches, and nn.Embedding for zones</span></a><span class="status" data-lesson-status="06">Not started</span></li>
+        </ol>
+      </div>
+
+      <div class="part">
+        <h2>Part 2. Vision, on dish photos</h2>
+        <p class="part-blurb">Forkcast needs to recognise what is in a photo of a dish. Food-101 ships with torchvision. GPU runtime from here on.</p>
+        <ol class="syllabus" start="7">
+          <li><span class="lnum">7</span><a href="#lesson-07">Images and the first CNN<span class="desc">Convolution as a sliding window, pooling, and the shape arithmetic of conv layers</span></a><span class="status" data-lesson-status="07">Not started</span></li>
+          <li><span class="lnum">8</span><a href="#lesson-08">GPU training for real<span class="desc">Device handling, mixed precision, augmentation, checkpoints, training loop v2</span></a><span class="status" data-lesson-status="08">Not started</span></li>
+          <li><span class="lnum">9</span><a href="#lesson-09">Transfer learning and evaluation<span class="desc">Pretrained backbones, confusion matrices, top-k accuracy</span></a><span class="status" data-lesson-status="09">Not started</span></li>
+          <li><span class="lnum">10</span><a href="#lesson-10">Debugging and interpreting models (optional)<span class="desc">Grad-CAM, error galleries, class imbalance, calibration</span></a><span class="status" data-lesson-status="10">Not started</span></li>
+        </ol>
+      </div>
+
+      <div class="part">
+        <h2>Part 3. Language, on reviews and menus</h2>
+        <p class="part-blurb">Forkcast reads restaurant reviews and menus. Yelp reviews from Hugging Face, and later a pretrained language model.</p>
+        <ol class="syllabus" start="11">
+          <li><span class="lnum">11</span><span class="soon">Text as tensors<span class="desc">Tokens, vocabularies, padding and masks, embeddings</span></span><span class="status">Not published yet</span></li>
+          <li><span class="lnum">12</span><span class="soon">Attention from scratch to Transformer<span class="desc">Queries, keys and values, positional encoding, nn.TransformerEncoder</span></span><span class="status">Not published yet</span></li>
+          <li><span class="lnum">13</span><span class="soon">Pretrained language models<span class="desc">Fine-tune DistilBERT for star ratings, sentence embeddings for menu search</span></span><span class="status">Not published yet</span></li>
+          <li><span class="lnum">14</span><span class="soon">Recommendations<span class="desc">User and restaurant embeddings, matrix factorization</span></span><span class="status">Not published yet</span></li>
+        </ol>
+      </div>
+
+      <div class="part">
+        <h2>Part 4. Shipping</h2>
+        <p class="part-blurb">Everything you trained goes behind one API, and the capstone combines all three kinds of data in one model.</p>
+        <ol class="syllabus" start="15">
+          <li><span class="lnum">15</span><span class="soon">Serving<span class="desc">Export, FastAPI endpoints, request batching, latency, Docker</span></span><span class="status">Not published yet</span></li>
+          <li><span class="lnum">16</span><span class="soon">Capstone: multimodal Forkcast<span class="desc">Image, text and tabular features in one model, with a model card</span></span><span class="status">Not published yet</span></li>
+          <li><span class="lnum">17</span><span class="soon">Experiment hygiene (optional)<span class="desc">Seeds, tracking, reproducing a result from a config file</span></span><span class="status">Not published yet</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <footer class="site">
+      <p>The course is a public template repository. Your links currently point at <a data-repo-url href="#"><span data-repo-name>your-github-user/forkcast-course</span></a>. Your progress on these pages is stored only in this browser.</p>
+    </footer>
+  </main>
+</div>

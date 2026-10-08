@@ -1,0 +1,327 @@
+<!-- Lesson 00: Setup and tensors. Section ids are prefixed l00-; rail links use #lesson-00/<section>. -->
+<article class="page" data-lesson="00" data-title="Setup and tensors" id="lesson-00" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-00/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-00/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-00/project" data-section="project">The project</a></li>
+        <li><a href="#lesson-00/tensors" data-section="tensors">Tensors have shapes</a></li>
+        <li><a href="#lesson-00/rearrange" data-section="rearrange">Rearranging</a></li>
+        <li><a href="#lesson-00/broadcast" data-section="broadcast">Broadcasting</a></li>
+        <li><a href="#lesson-00/questions" data-section="questions">Shape questions</a></li>
+        <li><a href="#lesson-00/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-00/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-00/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">0</div>
+      <div>
+        <h1>Setup and tensors</h1>
+        <p class="meta">Part 1, Foundations. About 90 minutes. No GPU needed. <b>You'll leave with</b> your own copy of the Forkcast repo, a working Colab workflow, and the shape habits every later lesson builds on.</p>
+      </div>
+    </div>
+
+    <section id="l00-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Create your own copy of the course repository and open a lesson notebook in Colab.</li>
+        <li>Run the environment check and read off which PyTorch version and device you have.</li>
+        <li>Create tensors and read their <code>shape</code>, <code>dtype</code> and <code>device</code>.</li>
+        <li>Rearrange a tensor with <code>unsqueeze</code>, <code>flatten</code>, <code>permute</code> and <code>reshape</code>, and predict the result shape before running the code.</li>
+        <li>Use broadcasting on purpose, and recognise the error message when it fails.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.tensor</code></li><li><code>torch.zeros / ones / randn / arange</code></li><li><code>.shape .dtype .device</code></li>
+        <li><code>x[0], x[:, 1], x[:3, :2]</code></li><li><code>unsqueeze flatten permute reshape</code></li><li><code>broadcasting</code></li>
+        <li><code>.mean(dim=, keepdim=)</code></li><li><code>.to(device)</code></li><li><code>torch.manual_seed</code></li><li><code>torch.from_numpy</code></li>
+      </ul>
+    </section>
+
+    <section id="l00-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <p>Four checks. Two are commands you run in Colab, one this page tracks for you, one you confirm on GitHub.</p>
+      <ul>
+        <li>
+          <input type="checkbox" id="l00-dod-env" data-dod="env">
+          <label for="l00-dod-env">The environment check prints your PyTorch version and the device it found.
+            <pre><code><span class="cmd">python -m forkcast.env</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l00-dod-tests" data-dod="tests">
+          <label for="l00-dod-tests">The Lesson 0 tests pass: <code>7 passed, 1 skipped, 1 deselected</code> on a CPU runtime, <code>8 passed, 1 deselected</code> on a GPU runtime. The deselected test is the stretch goal.
+            <pre><code><span class="cmd">pytest tests/test_00.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l00-dod-quiz" data-dod-auto="quiz">
+          <label for="l00-dod-quiz">All six shape questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l00-dod-push" data-dod="push">
+          <label for="l00-dod-push">Your work is pushed to your repository and the <em>DoD checks</em> workflow on GitHub is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 0 is done. The syllabus page will show it as complete on this browser.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l00-project">The project: Forkcast</h2>
+    <p>Forkcast is a food-delivery app, and over this course you build its machine-learning backend: a delivery-time predictor, a dish-photo classifier, a review reader, a recommender, all behind one API by Lesson 15. Every lesson adds code to the same repository, so by the end you have one real project rather than seventeen notebooks.</p>
+    <p>This lesson has no model in it yet. You set up the workshop and learn the material everything else is made of: tensors. The six small functions you write today come back later. <code>normalize_columns</code> is used in Lesson 3, <code>flatten_images</code> in Lesson 7 and <code>pairwise_distance</code> in Lesson 13.</p>
+
+    <h2 id="l00-tensors">Tensors have shapes</h2>
+    <p>A tensor is a grid of numbers with a <em>shape</em>. One number is a tensor with no dimensions. A list of numbers has one dimension. A table has two: rows and columns. Stack tables and you have three. PyTorch does not care what the dimensions mean, but you will, so this course colours them the same way everywhere:</p>
+    <ul class="legend" style="margin-bottom:1rem">
+      <li><span class="swatch" style="background:var(--dim-n)"></span>batch size <span class="shape dim-n">N</span>: how many examples</li>
+      <li><span class="swatch" style="background:var(--dim-d)"></span>features <span class="shape dim-d">d</span>: how many numbers describe one example</li>
+      <li><span class="swatch" style="background:var(--dim-c)"></span>channels <span class="shape dim-c">C</span> and <span class="swatch" style="background:var(--dim-s)"></span>spatial <span class="shape dim-s">H, W</span>: for images</li>
+      <li><span class="swatch" style="background:var(--dim-w)"></span>weights and <span class="swatch" style="background:var(--dim-y)"></span>outputs: arriving in Lesson 1</li>
+    </ul>
+    <p>A Forkcast order might be described by four numbers: distance in km, number of items, hour of the day, whether it is raining. That order is a tensor of shape <span class="shape">(<b class="dim-d">4</b>,)</span>. Thirty-two orders together are a tensor of shape <span class="shape">(<b class="dim-n">32</b>, <b class="dim-d">4</b>)</span>: one row per order, one column per feature. Try the presets, then type your own shape.</p>
+
+    <div class="widget" data-widget="shapeBuilder"></div>
+
+    <p>Two more properties travel with every tensor. The <code>dtype</code> is the kind of number inside; models want <code>float32</code>, and PyTorch gives you <code>int64</code> when you build a tensor from whole numbers, which is the source of a classic error you will meet below. The <code>device</code> is where the numbers live: <code>cpu</code>, or <code>cuda</code> for a GPU. Tensors can only be combined with tensors on the same device.</p>
+
+<pre><code>import torch
+torch.manual_seed(0)                  <span class="c"># same random numbers every run</span>
+
+orders = torch.randn(32, 4)           <span class="c"># 32 orders, 4 features, drawn at random</span>
+orders.shape                          <span class="out">torch.Size([32, 4])</span>
+orders.dtype                          <span class="out">torch.float32</span>
+orders.device                         <span class="out">device(type='cpu')</span>
+
+orders[0].shape                       <span class="out">torch.Size([4])      the first order</span>
+orders[:, 1].shape                    <span class="out">torch.Size([32])     the second feature of every order</span>
+orders[:3, :2].shape                  <span class="out">torch.Size([3, 2])   first three orders, first two features</span>
+
+torch.tensor([1, 2, 3]).dtype         <span class="out">torch.int64          whole numbers give int64</span>
+torch.tensor([1.0, 2.0, 3.0]).dtype   <span class="out">torch.float32        the dtype models use</span></code></pre>
+
+    <h2 id="l00-rearrange">Rearranging without changing the numbers</h2>
+    <p>Most shape work is regrouping the same numbers. The six values of a <span class="shape">(<b class="dim-n">2</b>, <b class="dim-d">3</b>)</span> tensor sit in memory as one line, 0 to 5. <code>view</code> and <code>reshape</code> cut that line into different groups; <code>unsqueeze</code> adds a dimension of size 1; <code>permute</code> is the odd one out because it changes the order you read the numbers in. Click each operation and watch the reading order.</p>
+
+    <div class="widget" data-widget="viewPermute"></div>
+
+    <p>Three of these you will use constantly: <code>unsqueeze(0)</code> turns one example into a batch of one, <code>flatten(1)</code> turns a batch of images into a batch of long vectors, and <code>permute</code> moves the channel dimension to where a library expects it.</p>
+
+<pre><code>one = orders[0]                        <span class="out">shape (4,)</span>
+one.unsqueeze(0).shape                 <span class="out">torch.Size([1, 4])          a batch of one order</span>
+
+images = torch.zeros(8, 1, 28, 28)     <span class="out">8 grayscale images</span>
+images.flatten(1).shape                <span class="out">torch.Size([8, 784])        keep dim 0, merge the rest</span>
+images.permute(0, 2, 3, 1).shape       <span class="out">torch.Size([8, 28, 28, 1])  channels last</span>
+images.reshape(8, -1).shape            <span class="out">torch.Size([8, 784])        -1 means "work this one out"</span></code></pre>
+
+    <h2 id="l00-broadcast">Broadcasting</h2>
+    <p>Arithmetic between two tensors of different shapes is allowed when the shapes <em>broadcast</em>. The rule: line the two shapes up from the right. In each position the sizes must be equal, or one of them must be 1 (or missing). A size of 1 is stretched to match the other. You will rely on this in every lesson, usually to apply one number per feature to a whole batch, so it is worth being able to do it in your head.</p>
+
+    <div class="widget" data-widget="broadcast"></div>
+
+    <p>The preset called <em>the classic mistake</em> is the one that will bite you first. A column mean computed with <code>mean(dim=0)</code> has shape <span class="shape">(<b class="dim-d">4</b>,)</span> and broadcasts fine. A per-order mean computed with <code>mean(dim=1)</code> has shape <span class="shape">(<b class="dim-n">32</b>,)</span> and does not; you need <code>keepdim=True</code> to get <span class="shape">(<b class="dim-n">32</b>, <b class="dim-d">1</b>)</span>.</p>
+
+<pre><code>bias = torch.tensor([0.0, 1.0, 2.0, 3.0])        <span class="out">shape (4,)</span>
+(orders + bias).shape                             <span class="out">torch.Size([32, 4])  bias stretched over 32 orders</span>
+
+col_means = orders.mean(dim=0)                    <span class="out">shape (4,)   one mean per feature</span>
+(orders - col_means).shape                        <span class="out">torch.Size([32, 4])</span>
+
+row_means = orders.mean(dim=1)                    <span class="out">shape (32,)  one mean per order</span>
+(orders - row_means).shape                        <span class="out">RuntimeError: The size of tensor a (4) must match
+                                                  the size of tensor b (32) at non-singleton dimension 1</span>
+row_means = orders.mean(dim=1, keepdim=True)      <span class="out">shape (32, 1)</span>
+(orders - row_means).shape                        <span class="out">torch.Size([32, 4])</span></code></pre>
+
+    <h2 id="l00-questions">Shape questions</h2>
+    <p>Predict first, run second: that habit is what makes shape errors rare. Answer all six here; this page records them for your definition of done. Then check yourself in the notebook. <span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="1,32,4" data-explain="unsqueeze(0) inserts a dimension of size 1 at position 0." data-hint="Where does the new dimension of size 1 go, and what happens to the others?">
+      <div class="quiz-row"><span class="q">1. What is the shape?</span></div>
+      <pre class="no-copy"><code>torch.randn(32, 4).unsqueeze(0).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="8,2352" data-explain="flatten(1) keeps dimension 0 and merges the rest: 3 × 28 × 28 = 2352." data-hint="Keep the batch dimension. Multiply everything after it.">
+      <div class="quiz-row"><span class="q">2. What is the shape?</span></div>
+      <pre class="no-copy"><code>torch.zeros(8, 3, 28, 28).flatten(1).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="32,4" data-explain="(4,) lines up with the last dimension and is stretched over all 32 rows." data-hint="Line the two shapes up from the right.">
+      <div class="quiz-row"><span class="q">3. What is the shape?</span></div>
+      <pre class="no-copy"><code>(torch.ones(32, 4) * torch.ones(4)).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="error" data-explain="(32,) lines up with the features dimension of size 4, not the batch dimension. A (32, 1) tensor would work." data-hint="Line them up from the right: 32 sits under 4. Are they equal, or is one of them 1? If neither, what happens?">
+      <div class="quiz-row"><span class="q">4. What is the shape, or does it fail?</span></div>
+      <pre class="no-copy"><code>(torch.ones(32, 4) + torch.ones(32)).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…) or error" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="4,2,3" data-explain="permute lists the old dimensions in their new order: old dim 2 first, then old dim 0, then old dim 1." data-hint="Each number in permute names which old dimension comes next.">
+      <div class="quiz-row"><span class="q">5. What is the shape?</span></div>
+      <pre class="no-copy"><code>torch.randn(2, 3, 4).permute(2, 0, 1).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="1,4" data-explain="Averaging over dimension 0 collapses the 32 rows; keepdim keeps that dimension around with size 1." data-hint="Which dimension disappears when you average over it, and what does keepdim do with it?">
+      <div class="quiz-row"><span class="q">6. What is the shape?</span></div>
+      <pre class="no-copy"><code>torch.randn(32, 4).mean(dim=0, keepdim=True).shape</code></pre>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l00-build">Build it</h2>
+    <p>Eight steps. The first two happen on GitHub and Colab, the rest in the notebook. Everything you type is also in the notebook, so you can copy from either.</p>
+    <p class="note"><b>Reading the code blocks.</b> Blocks marked <em>Colab cell</em> are notebook cells: a leading <code>!</code> runs a shell command, <code>%cd</code> is an IPython magic that changes the notebook's working directory, and <code>{GITHUB_USER}</code> inserts a Python variable into the command. Blocks marked <em>shell command</em> are written with a <code>$</code> prompt for a terminal; in Colab, run them with a leading <code>!</code>. Working locally instead of in Colab? Drop the <code>!</code>, the magics and the braces, and the same commands work in a terminal.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Create your copy of the repository</h3>
+        <p>Open the <a data-template-url href="#">course repository on GitHub</a> and click <em>Use this template</em>, then <em>Create a new repository</em>. Name it <code>forkcast-course</code> and keep it public. You now own a repository with the same files as the course, and every lesson you will commit to it.</p>
+        <p class="expect">Expected: a repository at <code>github.com/your-username/forkcast-course</code> with an <em>Actions</em> tab.</p>
+        <p>Then tell this site where it is. Every <em>Open in Colab</em> button and repository link on these pages is built from your GitHub user, and the setting is remembered in this browser.</p>
+        <div class="panel setup-inline" data-github-setup></div>
+        <p class="expect">Expected: the link above the setup box now reads <code>github.com/</code><span data-repo-name>your-github-user/forkcast-course</span>, and the Colab button in the next step is active.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Open the Lesson 0 notebook in Colab</h3>
+        <p>Colab gives you a Linux machine with PyTorch already installed. For this lesson the default CPU runtime is enough. If you want to see a GPU appear in the environment check, choose <em>Runtime</em>, <em>Change runtime type</em>, and pick a GPU; you will need one from Lesson 7.</p>
+        <p><a class="btn" data-colab="notebooks/lesson00.ipynb" href="#">Open lesson00.ipynb in Colab</a></p>
+        <p class="expect">Expected: the notebook opens with a setup cell at the top asking for your GitHub username.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Clone your repository and install the package</h3>
+        <p>Edit the first line, then run the cell. <code>pip install -e .</code> installs <code>forkcast</code> in editable mode, so the files you change are the files Python imports.</p>
+<pre><code>GITHUB_USER = <span class="s">"your-github-username"</span>   <span class="c"># edit this line</span>
+REPO = <span class="s">"forkcast-course"</span>
+
+!git clone https://github.com/{GITHUB_USER}/{REPO}.git
+%cd {REPO}
+!pip install -e .</code></pre>
+        <p class="expect">Expected: the output ends with <code>Successfully installed forkcast-0.0.1</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the environment check</h3>
+<pre><code>!python -m forkcast.env
+<span class="out">Forkcast environment check
+  python   3.11.x
+  torch    2.x.x
+  device   cpu      no CUDA device found; fine until Lesson 7</span></code></pre>
+        <p>On a GPU runtime the last line names the card instead. Either way, tick the first box in your definition of done.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Meet tensors in the notebook</h3>
+        <p>Run the exploration cells. They are the code from this page: build <code>orders</code>, read its shape, dtype and device, slice it, reshape <code>images</code>, and reproduce the broadcasting error on purpose. For each cell, say the shape out loud before you run it.</p>
+<pre><code>import torch
+torch.manual_seed(0)
+
+orders = torch.randn(32, 4)
+orders.shape, orders.dtype, orders.device
+
+images = torch.zeros(8, 1, 28, 28)
+images.flatten(1).shape
+images.permute(0, 2, 3, 1).shape
+
+bias = torch.tensor([0.0, 1.0, 2.0, 3.0])
+(orders + bias).shape
+orders.mean(dim=0, keepdim=True).shape
+
+device = <span class="s">"cuda"</span> if torch.cuda.is_available() else <span class="s">"cpu"</span>
+orders.to(device).device                       <span class="c"># .to() returns a new tensor</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write the six functions in <code>forkcast/tensors.py</code></h3>
+        <p>Each is one to three lines. The notebook has a <code>%%writefile forkcast/tensors.py</code> cell with the file's starter text: edit it there and run it to save, or open the file in Colab's file browser on the left and edit it directly. The docstrings state the exact shapes the tests expect.</p>
+<pre><code>def to_batch(x):            <span class="c"># (d,) -> (1, d)        add a size-1 dimension at the front</span>
+def flatten_images(images): <span class="c"># (N, C, H, W) -> (N, C*H*W)   merge everything after the batch dim</span>
+def channels_last(images):  <span class="c"># (N, C, H, W) -> (N, H, W, C) reorder; the batch dim stays first</span>
+def normalize_columns(x):   <span class="c"># (N, d) -> (N, d)      each column: subtract its mean, divide by its std</span>
+def pairwise_distance(a, b):<span class="c"># (N, d), (M, d) -> (N, M)     euclidean distance of every a to every b</span>
+def move_to(x, device):     <span class="c"># return x on the given device</span></code></pre>
+        <p>Hints. <code>normalize_columns</code> needs the mean and std over <code>dim=0</code>, with <code>correction=0</code> on the std; broadcasting does the rest. <code>pairwise_distance</code> is a broadcasting puzzle: <code>a[:, None, :]</code> has shape <span class="shape">(<b class="dim-n">N</b>, 1, <b class="dim-d">d</b>)</span> and <code>b[None, :, :]</code> has shape <span class="shape">(1, <b class="dim-n">M</b>, <b class="dim-d">d</b>)</span>; subtract them, square, sum over the last dimension, take the square root. Use the broadcasting widget above to convince yourself of the shape before you write it.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests</h3>
+<pre><code>!pytest tests/test_00.py -q
+<span class="out">.......s                                                                 [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_00.py:76: needs a CUDA device; pick a GPU runtime in Colab to run it
+7 passed, 1 skipped, 1 deselected in 0.4s</span></code></pre>
+        <p>The skipped test needs a GPU; on a GPU runtime it runs and you see <code>8 passed</code>. The deselected one is the stretch goal at the end of this page. If a test fails, read the assertion message: it tells you the shape it got and the shape it expected. Fix the function, re-run the <code>%%writefile</code> cell, run the tests again. Tick the second box when they pass.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Commit, push, and watch the check go green</h3>
+        <p>Pushing needs a token. On GitHub, open <em>Settings</em>, <em>Developer settings</em>, <em>Personal access tokens</em>, and create a fine-grained token for your <code>forkcast-course</code> repository with <em>Contents: read and write</em>. The notebook asks for it with <code>getpass</code> so it never appears in the output.</p>
+<pre><code>from getpass import getpass
+TOKEN = getpass(<span class="s">"GitHub token with access to your repo: "</span>)
+
+!git config user.name <span class="s">"{GITHUB_USER}"</span>
+!git config user.email <span class="s">"{GITHUB_USER}@users.noreply.github.com"</span>
+!git add -A
+!git commit -m <span class="s">"Lesson 0: tensors"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+        <p>Open your repository's <em>Actions</em> tab. The <em>DoD checks</em> workflow runs the same fast tests on a clean machine. When it is green, tick the last box: Lesson 0 is done.</p>
+      </div></li>
+    </ol>
+
+    <h2 id="l00-errors">Common errors</h2>
+    <p>You will see each of these more than once this course. Learn to recognise them by their first line.</p>
+    <dl class="errors">
+      <dt>RuntimeError: shape '[8, 700]' is invalid for input of size 6272</dt>
+      <dd>A reshape must keep exactly the same number of elements. Count them, or let PyTorch do it with <code>-1</code> for one dimension: <code>x.reshape(8, -1)</code>.</dd>
+
+      <dt>RuntimeError: The size of tensor a (4) must match the size of tensor b (32) at non-singleton dimension 1</dt>
+      <dd>Broadcasting failed. Line the shapes up from the right and find the pair that is neither equal nor 1. Usually the fix is <code>keepdim=True</code> on a reduction, or <code>.unsqueeze(1)</code> to turn <span class="shape">(<b class="dim-n">32</b>,)</span> into <span class="shape">(<b class="dim-n">32</b>, 1)</span>.</dd>
+
+      <dt>RuntimeError: view size is not compatible with input tensor's size and stride (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.</dt>
+      <dd>You called <code>view</code> after <code>permute</code> or <code>transpose</code>. Use <code>reshape</code>, which copies when it has to, or call <code>.contiguous()</code> first.</dd>
+
+      <dt>RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!</dt>
+      <dd>One tensor moved to the GPU and another did not. Remember that <code>.to(device)</code> returns a new tensor: write <code>x = x.to(device)</code>, not <code>x.to(device)</code> on a line by itself.</dd>
+
+      <dt>RuntimeError: expected scalar type Float but found Long</dt>
+      <dd>A tensor built from whole numbers is <code>int64</code>. Write <code>1.0</code> instead of <code>1</code>, or convert with <code>.float()</code>.</dd>
+
+      <dt>ModuleNotFoundError: No module named 'forkcast'</dt>
+      <dd>The notebook is not inside the repository folder, or the install cell did not run. Run <code>%cd /content/forkcast-course</code> and then <code>!pip install -e .</code> again.</dd>
+    </dl>
+
+    <h2 id="l00-stretch">Stretch</h2>
+    <p>Write <code>one_hot(indices, num_classes)</code> in the same file: a tensor of class ids with shape <span class="shape">(<b class="dim-n">N</b>,)</span> becomes a float tensor of shape <span class="shape">(<b class="dim-n">N</b>, <b class="dim-d">num_classes</b>)</span> with a single 1 in each row. Do it with <code>torch.arange</code>, a comparison, and broadcasting, not with <code>torch.nn.functional.one_hot</code>. The test is already there:</p>
+<pre><code>!pytest tests/test_00.py -m stretch -q
+<span class="out">1 passed, 8 deselected in 0.9s</span></code></pre>
+    <p>If you finish early, make a tensor with a billion elements and watch the memory readout in Colab's toolbar. It is worth seeing what 4 GB of float32 feels like before Lesson 7 makes you care.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <span><span class="dir">Previous</span><span class="title">This is the first lesson</span></span>
+      <a class="next" href="#lesson-01"><span class="dir">Next</span><span class="title">Lesson 1: Linear regression by hand</span></a>
+    </nav>
+  </main>
+</article>

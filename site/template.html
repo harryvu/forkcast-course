@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forkcast course: deep learning and PyTorch by building</title>
+<meta name="description" content="An interactive, project-based course that teaches deep learning and PyTorch to developers who know Python, by building the ML backend of a food-delivery app. All lessons in one page.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+{{CSS}}
+</style>
+<script>
+{{CONFIG}}
+</script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#home">Forkcast course</a>
+  <span class="where" data-where></span>
+  <span class="spacer"></span>
+  <a class="btn secondary small" data-repo-url href="#">Repository</a>
+  <button class="btn secondary small" type="button" data-github-toggle aria-controls="github-setup"><span data-github-label>Set your GitHub user</span></button>
+  <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch theme">☾</button>
+</header>
+
+<aside class="setup-panel" id="github-setup" hidden>
+  <div class="setup-head"><strong>Your copy of the course</strong><button type="button" class="icon-btn" data-setup-close aria-label="Close">×</button></div>
+  <p class="muted">Every repository and Colab link on this site is built from one GitHub user and repository name. Enter the user that owns the copy you work from: your own, once you have used the template, or your instructor's. Remembered in this browser only.</p>
+  <div data-github-setup></div>
+</aside>
+
+{{HOME}}
+
+{{LESSONS}}
+
+<script>
+{{JS}}
+</script>
+<script>FC.init();</script>
+</body>
+</html>

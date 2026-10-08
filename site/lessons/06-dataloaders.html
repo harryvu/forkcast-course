@@ -1,0 +1,319 @@
+<!-- Lesson 06: Dataset, DataLoader and categorical embeddings. Section ids are prefixed l06-; rail links use #lesson-06/<section>. -->
+<article class="page" data-lesson="06" data-title="Dataset, DataLoader and categorical embeddings" id="lesson-06" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-06/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-06/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-06/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-06/realdata" data-section="realdata">Real data</a></li>
+        <li><a href="#lesson-06/dataset" data-section="dataset">Dataset</a></li>
+        <li><a href="#lesson-06/loader" data-section="loader">DataLoader</a></li>
+        <li><a href="#lesson-06/minibatch" data-section="minibatch">Mini-batches</a></li>
+        <li><a href="#lesson-06/embedding" data-section="embedding">Embeddings</a></li>
+        <li><a href="#lesson-06/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-06/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-06/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-06/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">6</div>
+      <div>
+        <h1>Dataset, DataLoader and categorical embeddings</h1>
+        <p class="meta">Part 1, Foundations, last lesson. About 2.5 hours. No GPU needed. <b>You'll leave with</b> the data pipeline every later lesson uses, a model that reads real trips, and the idea behind embeddings, which comes back for words in Lesson 11.</p>
+      </div>
+    </div>
+
+    <section id="l06-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Load real tabular data, apply explicit cleaning rules, and say how many rows they removed and why.</li>
+        <li>Wrap tensors in a <code>Dataset</code> and iterate mini-batches with a <code>DataLoader</code>, choosing <code>batch_size</code>, <code>shuffle</code> and <code>drop_last</code> on purpose.</li>
+        <li>Explain why mini-batches make the loss curve noisier and training faster.</li>
+        <li>Replace a categorical column with <code>nn.Embedding</code> and read the table's shape.</li>
+        <li>Teach the toolkit to take loaders, with a <code>device</code> argument ready for Lesson 8.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.utils.data.Dataset</code></li><li><code>__len__ / __getitem__</code></li><li><code>DataLoader(batch_size, shuffle, drop_last)</code></li><li><code>len(loader)</code></li>
+        <li><code>nn.Embedding</code></li><li><code>torch.tensor(frame.values)</code></li><li><code>.long()</code></li><li><code>torch.cat(dim=1)</code></li><li><code>model(*inputs)</code></li><li><code>.to(device)</code></li>
+      </ul>
+    </section>
+
+    <section id="l06-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l06-dod-tests" data-dod="tests">
+          <label for="l06-dod-tests">The Lesson 6 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_06.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l06-dod-fast" data-dod="fast">
+          <label for="l06-dod-fast">Everything so far still passes: <code>48 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l06-dod-quiz" data-dod-auto="quiz">
+          <label for="l06-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l06-dod-push" data-dod="push">
+          <label for="l06-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 6 is done, and so is Part 1. From here the data gets bigger and the models get deeper; the loop stays the one you built.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l06-project">Where we are</h2>
+    <p>Six lessons on deliveries that came out of a random number generator. Today they come out of a city. New York publishes every yellow-taxi trip: when it started, when it ended, how far it went, from which zone to which. A taxi ride is not a food delivery, but it has the same shape, a rider moving through traffic from here to there, and it is the closest public data to a delivery log. Three things change at once: the data has to be cleaned before it is believed, it no longer fits comfortably in one tensor you step on all at once, and two of its columns are not numbers at all but zone ids.</p>
+
+    <h2 id="l06-realdata">Real data has to be cleaned first</h2>
+    <p>The repository bundles a small <em>simulated</em> file with the exact TLC columns, so the tests run offline; the notebook downloads a real month. Both go through the same function, <code>clean_trips</code>, which is provided and worth reading. It derives minutes from the two timestamps, hour and weekday from the pickup, fills missing passenger counts, maps zone ids outside 1 to 265 to 0 for "unknown", and then drops rows that cannot be real: zero distance, trips under a minute or over two hours. It prints what it removed, because a cleaning step that works silently is a cleaning step nobody checks.</p>
+<pre><code>from forkcast import trips
+frame = trips.load_trips()                          <span class="c"># the bundled sample; pass a path for the real month</span>
+<span class="out">clean_trips: kept 5,850 of 6,000 rows (150 removed)</span>
+frame.head(3)
+<span class="out">   trip_distance  pickup_hour  weekday  passenger_count  pu_zone  do_zone    minutes
+0           5.37         16.0      2.0              1.0       78       96      21.95
+1           6.12         15.0      3.0              3.0       73       76      22.40
+2           3.38         10.0      4.0              1.0      263      157      11.63</span>
+frame["minutes"].mean(), frame["minutes"].std()     <span class="out">(15.0, 8.6)</span></code></pre>
+    <p>Four columns are continuous and get normalized as before. Two, <code>pu_zone</code> and <code>do_zone</code>, are categories: zone 132 is not "more" than zone 43, it is JFK airport. Feeding them to the model as numbers would be a lie the model cannot detect. They get their own treatment below.</p>
+
+    <h2 id="l06-dataset">Dataset: one item at a time</h2>
+    <p>A <code>Dataset</code> is a class with two methods: <code>__len__</code> says how many items there are, and <code>__getitem__(i)</code> returns item <code>i</code>. That is the whole contract, and it is what lets PyTorch batch anything, tables, images, text, the same way. For trips, an item is a tuple: the four continuous features, the two zone ids as <code>int64</code>, and the minutes. Convert the whole frame to tensors once in <code>__init__</code>, so <code>__getitem__</code> is a plain index.</p>
+<pre><code>class TripsDataset(Dataset):
+    def __init__(self, frame, normalizer=None):
+        cont = torch.tensor(frame[CONTINUOUS].values, dtype=torch.float32)        <span class="c"># (N, 4)</span>
+        self.cont = normalizer.transform(cont) if normalizer is not None else cont
+        self.cat = torch.tensor(frame[CATEGORICAL].values, dtype=torch.long)       <span class="c"># (N, 2): indices, so int64</span>
+        self.target = torch.tensor(frame[TARGET].values, dtype=torch.float32)       <span class="c"># (N,)</span>
+    def __len__(self):
+        return len(self.target)
+    def __getitem__(self, i):
+        return self.cont[i], self.cat[i], self.target[i]
+
+ds = TripsDataset(train_frame, norm)
+len(ds)                                              <span class="out">4095</span>
+ds[0]                                                <span class="out">(tensor([ 0.83,  0.67, -0.42, -0.79]), tensor([ 78,  96]), tensor(21.95))</span></code></pre>
+
+    <h2 id="l06-loader">DataLoader: items become batches</h2>
+    <p>A <code>DataLoader</code> wraps a dataset and hands out batches. Each epoch it decides an order of the indices (a fresh random one when <code>shuffle=True</code>), walks that order <code>batch_size</code> items at a time, fetches each item with <code>__getitem__</code>, and stacks the tuples field by field, so a batch of trips is a tuple of three tensors with a leading batch dimension. <code>drop_last=True</code> throws away the short final batch, which keeps every training step the same size; the validation loader keeps it, because every row must be scored. Step through one.</p>
+
+    <div class="widget" data-widget="loaderAnim"></div>
+
+<pre><code>train_loader = DataLoader(TripsDataset(train_frame, norm), batch_size=256, shuffle=True, drop_last=True)
+val_loader   = DataLoader(TripsDataset(val_frame, norm),   batch_size=256, shuffle=False)
+len(train_loader), len(val_loader)                   <span class="out">(15, 4)      4095 // 256 = 15 full batches; 878 rows -> 4 batches, the last one short</span>
+cont, cat, minutes = next(iter(train_loader))
+cont.shape, cat.shape, minutes.shape                 <span class="out">(torch.Size([256, 4]), torch.Size([256, 2]), torch.Size([256]))</span>
+cat.dtype                                            <span class="out">torch.int64</span></code></pre>
+
+    <h2 id="l06-minibatch">Mini-batches change the loop, a little</h2>
+    <p>Until now one epoch was one gradient step on all the data. With a loader, one epoch is <code>len(loader)</code> steps, each on a batch. Each step's gradient is an estimate from 256 trips rather than the exact gradient over all 4095, so the loss curve gets noisier, and training gets much faster per pass through the data, because fifteen updates happen where one did. Beyond speed, there is no choice: a month of real trips is three million rows, and a step over all of them at once would not fit in memory.</p>
+
+    <div class="widget" data-widget="batchCurves"></div>
+
+    <p>The toolkit grows loader versions of its functions. <code>train_one_epoch_loader</code> loops over the batches, and inside the loop the five lines are the ones from Lesson 3. Two details: a batch is a tuple whose last element is the target, so <code>*inputs, target = batch</code> and <code>model(*inputs)</code> work for one input or two; and the epoch's loss is the mean over rows, not over batches, so each batch's loss is weighted by its size. A <code>device</code> argument moves each batch before use; it is <code>"cpu"</code> today and does nothing, and in Lesson 8 it is the only thing that changes.</p>
+<pre><code>def train_one_epoch_loader(model, loader, optimizer, loss_fn, device="cpu"):
+    model.train()
+    total, seen = 0.0, 0
+    for batch in loader:
+        *inputs, target = batch
+        inputs, target = [x.to(device) for x in inputs], target.to(device)
+        optimizer.zero_grad()
+        loss = loss_fn(model(*inputs), target)
+        loss.backward()
+        optimizer.step()
+        total += loss.item() * len(target)          <span class="c"># weighted: the last batch may be smaller</span>
+        seen += len(target)
+    return total / seen</code></pre>
+
+    <h2 id="l06-embedding">Embeddings: a learned table for categories</h2>
+    <p>The honest way to feed a category to a model is one-hot: a vector of 266 zeros with a single 1. The first linear layer then multiplies that vector by a <span class="shape">(<b class="dim-d">266</b>, <b class="dim-w">8</b>)</span> weight matrix, and multiplying a one-hot vector by a matrix simply selects one row of it. <code>nn.Embedding(266, 8)</code> is that matrix with the multiplication skipped: give it an index, get a row of 8 learned numbers. The rows are parameters like any other, trained by the same backward pass, so zones that affect trip time the same way drift toward similar rows, with nobody telling the model what an airport is.</p>
+
+    <div class="widget" data-widget="embeddingLookup"></div>
+
+<pre><code>class TabularNet(nn.Module):
+    def __init__(self, n_continuous, zone_vocab=266, emb_dim=8, hidden=(64, 64)):
+        super().__init__()
+        self.pu = nn.Embedding(zone_vocab, emb_dim)       <span class="c"># weight (266, 8)</span>
+        self.do = nn.Embedding(zone_vocab, emb_dim)
+        self.mlp = MLP(n_continuous + 2 * emb_dim, hidden) <span class="c"># Lesson 4's MLP, input width 4 + 8 + 8</span>
+    def forward(self, x_cont, x_cat):                     <span class="c"># (N, 4), (N, 2) int64 -> (N,)</span>
+        features = torch.cat([x_cont, self.pu(x_cat[:, 0]), self.do(x_cat[:, 1])], dim=1)   <span class="c"># (N, 20)</span>
+        return self.mlp(features)
+
+model = TabularNet(4)
+count_parameters(model)                              <span class="out">9825     of which 2 × 266 × 8 = 4256 live in the two tables</span></code></pre>
+    <p>The size of the table's rows, <code>emb_dim</code>, is a choice: too small and zones cannot be told apart, too large and each zone's few trips cannot pin its row down. Eight is a reasonable default for a few hundred categories. Lesson 11 uses the identical layer for words, with a vocabulary of thirty thousand and rows of a few hundred numbers.</p>
+
+    <h2 id="l06-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="23" data-explain="6000 // 256 = 23 full batches; the 112 leftover rows are dropped this epoch and reshuffled into the next." data-hint="Integer division, because drop_last discards the remainder.">
+      <div class="quiz-row"><span class="q">1. 6000 training rows, <code>batch_size=256</code>, <code>drop_last=True</code>. What is <code>len(train_loader)</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="266, 8" data-explain="One row per possible index, emb_dim numbers per row." data-hint="(vocabulary, embedding size).">
+      <div class="quiz-row"><span class="q">2. What is <code>nn.Embedding(266, 8).weight.shape</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="256, 8" data-explain="Each of the 256 indices picks one row of 8 numbers." data-hint="An index tensor of shape (N,) comes out as (N, emb_dim).">
+      <div class="quiz-row"><span class="q">3. <code>x_cat</code> has shape (256, 2). What is the shape of <code>model.pu(x_cat[:, 0])</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="256, 20" data-explain="Concatenating along dim=1 adds the widths: 4 + 8 + 8." data-hint="torch.cat along dim=1 keeps the batch dimension and adds the rest.">
+      <div class="quiz-row"><span class="q">4. In <code>forward</code>, <code>torch.cat([x_cont, pu, do], dim=1)</code> with shapes (256, 4), (256, 8), (256, 8). What is the result's shape?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="265" data-explain="Indices run from 0 to vocab − 1. Zone 266 would raise an index error, which is why unknown zones are mapped to 0, not to a new id." data-hint="Indices start at zero.">
+      <div class="quiz-row"><span class="q">5. What is the largest index <code>nn.Embedding(266, 8)</code> accepts?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="150" data-explain="15 batches per epoch, one optimizer step each, for 10 epochs. Lesson 5's full-batch loop would have made 10." data-hint="steps per epoch × epochs.">
+      <div class="quiz-row"><span class="q">6. <code>len(train_loader)</code> is 15. How many <code>optimizer.step()</code> calls happen in 10 epochs?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l06-build">Build it</h2>
+    <p>A new file <code>forkcast/trips.py</code> (cleaning provided, dataset and loaders yours), <code>TabularNet</code> in <code>forkcast/model.py</code>, and the loader functions in <code>forkcast/train.py</code>.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 6 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson06.ipynb" href="#lesson-06/build">Open lesson06.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Load and clean the bundled sample, then split it</h3>
+<pre><code>from forkcast import trips
+frame = trips.load_trips()                          <span class="out">clean_trips: kept 5,850 of 6,000 rows (150 removed)</span>
+train_frame, val_frame, test_frame = trips.split_frame(frame, seed=0)
+len(train_frame), len(val_frame), len(test_frame)   <span class="out">(4095, 878, 877)</span>
+norm = Normalizer().fit(torch.tensor(train_frame[trips.CONTINUOUS].values, dtype=torch.float32))
+norm.mean                                           <span class="out">tensor([ 3.10, 11.35,  2.83,  1.89])   miles, hour, weekday, passengers</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>TripsDataset</code></h3>
+        <p>Three methods in the <code>trips.py</code> cell. Check <code>len(ds)</code> and the three parts of <code>ds[0]</code>: shapes <span class="shape">(4,)</span>, <span class="shape">(2,)</span>, <span class="shape">()</span>, and the middle one <code>int64</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>make_loaders</code> and inspect a batch</h3>
+<pre><code>train_loader, val_loader = trips.make_loaders(train_frame, val_frame, norm, batch_size=256)
+len(train_loader), len(val_loader)                   <span class="out">(15, 4)</span>
+cont, cat, minutes = next(iter(train_loader))
+cont.shape, cat.shape, minutes.shape, cat.dtype      <span class="out">(torch.Size([256, 4]), torch.Size([256, 2]), torch.Size([256]), torch.int64)</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>TabularNet</code></h3>
+        <p>In the <code>model.py</code> cell, below <code>MLP</code>: two embedding tables, one MLP, a <code>torch.cat</code>. Check the forward shape on the batch above is <span class="shape">(<b class="dim-n">256</b>,)</span> and <code>count_parameters</code> is 9825.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write the loader functions and train</h3>
+        <p>In the <code>train.py</code> cell: <code>train_one_epoch_loader</code>, <code>evaluate_loader</code> and <code>fit_loader</code>, the last one a copy of Lesson 5's <code>fit_with_validation</code> with the loader functions swapped in and <code>model.to(device)</code> at the top.</p>
+<pre><code>torch.manual_seed(0)
+model = TabularNet(4)
+history = train.fit_loader(model, train_loader, val_loader, epochs=25, lr=3e-3)
+[round(v, 1) for v in history["val"][:5]]           <span class="out">[203.9, 67.3, 48.4, 33.4, 27.3]</span>
+history["best_val"], history["best_epoch"]          <span class="out">(14.76, 24)   still improving at 25 epochs</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Prove the zones carry information</h3>
+        <p>Train the same MLP on the four continuous columns alone, ignoring the zone ids, for the same 25 epochs. The notebook has the small wrapper class.</p>
+<pre><code><span class="out">continuous features only:  best validation loss 20.75
+with zone embeddings:       best validation loss 14.76</span></code></pre>
+        <p class="expect">Expected: a clear win for the embeddings. In the simulated sample every zone has its own typical delay, which only the tables can learn. On the real month the gap is smaller but still there; airports and Manhattan's core are the zones that matter most.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: forget that zone ids are indices</h3>
+<pre><code>cat_float = cat.float()
+model(cont, cat_float)
+<span class="out">RuntimeError: Expected tensor for argument #1 'indices' to have one of the following scalar types: Long, Int; but got torch.FloatTensor instead</span></code></pre>
+        <p>An embedding looks rows up by integer position. Keep categorical columns as <code>int64</code> all the way from the DataFrame to the model, and never normalize them: a normalized zone id is not an index to anything.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Download a real month and run it all again</h3>
+<pre><code>!python tools/get_taxi.py --month 2024-01 --rows 200000
+frame = trips.load_trips("data/taxi_2024-01.csv")</code></pre>
+        <p>The rest of the notebook runs unchanged on 200,000 real trips; expect a few minutes per 25 epochs on a CPU runtime, under a minute with a GPU. Compare the cleaning report, the loss curve and the airport zones' nearest neighbours in embedding space with the sample's. The download is the one step this course cannot test for you; the URL pattern is in the tool with a note on where to look if it moves.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_06.py -q
+<span class="out">7 passed in 5.0s</span>
+!pytest -m fast -q
+<span class="out">48 passed, … skipped, 1 deselected in 11.2s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 6: datasets, loaders, embeddings"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l06-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: Expected tensor for argument #1 'indices' to have one of the following scalar types: Long, Int; but got torch.FloatTensor</dt>
+      <dd>Zone ids reached the embedding as floats. Build the categorical tensor with <code>dtype=torch.long</code> and keep it out of the Normalizer.</dd>
+
+      <dt>IndexError: index out of range in self</dt>
+      <dd>An index equal to or above the vocabulary size. Zone ids run 1 to 265 and unknowns are mapped to 0, so the table needs 266 rows; check <code>clean_trips</code> ran.</dd>
+
+      <dt>TypeError: forward() missing 1 required positional argument: 'x_cat'</dt>
+      <dd>The loader yields three tensors and the loop passed only the first. Use <code>*inputs, target = batch</code> and <code>model(*inputs)</code>.</dd>
+
+      <dt>Training loss per epoch looks right, validation loss is nan</dt>
+      <dd>The validation frame was normalized with a Normalizer fitted on a column that was constant in its own data (std 0) or not fitted at all. Fit once on the training frame and pass that one object to both datasets.</dd>
+
+      <dt>The last training batch has a different size and a shape assertion fails</dt>
+      <dd>Set <code>drop_last=True</code> on the training loader, or write code that does not assume a fixed batch size, which is the better habit.</dd>
+
+      <dt>Validation loss stuck near the variance of the target</dt>
+      <dd><code>shuffle=False</code> on a training file that is sorted by time or zone. Shuffle the training loader.</dd>
+    </dl>
+
+    <h2 id="l06-stretch">Stretch</h2>
+    <p>Add <code>num_workers=2</code> and <code>pin_memory=True</code> to the training loader and time an epoch with and without; on this data the difference is nil, and finding out why (the dataset is already tensors in memory) is the point. Then pull the two embedding tables out of the trained model and, for the airport zones 132 and 138, list the five nearest zones by <code>torch.cdist</code>; look them up in the TLC zone table and see whether the model's idea of similarity matches the map.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-05"><span class="dir">Previous</span><span class="title">Lesson 5: Generalization</span></a>
+      <a class="next" href="#lesson-07"><span class="dir">Next</span><span class="title">Lesson 7: Images and the first CNN</span></a>
+    </nav>
+  </main>
+</article>

@@ -1,0 +1,277 @@
+<!-- Lesson 09: Transfer learning and evaluation. Section ids are prefixed l09-; rail links use #lesson-09/<section>. -->
+<article class="page" data-lesson="09" data-title="Transfer learning and evaluation" id="lesson-09" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-09/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-09/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-09/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-09/pretrained" data-section="pretrained">Borrowed eyes</a></li>
+        <li><a href="#lesson-09/freeze" data-section="freeze">Freeze, replace, train</a></li>
+        <li><a href="#lesson-09/finetune" data-section="finetune">Fine-tuning</a></li>
+        <li><a href="#lesson-09/evaluate" data-section="evaluate">Evaluating honestly</a></li>
+        <li><a href="#lesson-09/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-09/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-09/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-09/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">9</div>
+      <div>
+        <h1>Transfer learning and evaluation</h1>
+        <p class="meta">Part 2, Vision. About 2.5 hours. GPU runtime. <b>You'll leave with</b> a dish classifier built on a network that already knows how to see, trained in minutes, and the tools to say exactly where it fails.</p>
+      </div>
+    </div>
+
+    <section id="l09-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Load a pretrained backbone from <code>torchvision.models</code> and explain what it already knows.</li>
+        <li>Freeze it, replace its head, and train only the head, first on cached features in seconds.</li>
+        <li>Unfreeze the top block and fine-tune it with its own, smaller learning rate via optimizer parameter groups.</li>
+        <li>Evaluate with a confusion matrix, per-class accuracy, the most-confused pairs, and top-k accuracy.</li>
+        <li>Beat Lesson 7's from-scratch network on the same dish photos, and say by how much.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torchvision.models.resnet18</code></li><li><code>ResNet18_Weights.DEFAULT</code></li><li><code>weights.transforms()</code></li><li><code>requires_grad_(False)</code></li>
+        <li><code>model.fc = nn.Linear(...)</code></li><li><code>nn.Identity</code></li><li><code>optimizer parameter groups</code></li><li><code>Tensor.topk</code></li><li><code>torch.bincount</code></li><li><code>named_parameters()</code></li>
+      </ul>
+    </section>
+
+    <section id="l09-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l09-dod-tests" data-dod="tests">
+          <label for="l09-dod-tests">The Lesson 9 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_09.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l09-dod-fast" data-dod="fast">
+          <label for="l09-dod-fast">Everything so far still passes: <code>69 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l09-dod-quiz" data-dod-auto="quiz">
+          <label for="l09-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l09-dod-push" data-dod="push">
+          <label for="l09-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 9 is done. This is how nearly every real vision model is built: start from one that works.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l09-project">Where we are</h2>
+    <p>Lesson 7's <code>SmallCNN</code> learned to see from two thousand dish photos and did noticeably better than guessing. Forkcast has thousands of restaurants and a hundred kinds of dish, and no amount of patience will get a network trained from scratch on that little data to a useful accuracy. The way out is not more Forkcast data. It is to start from a network that someone else trained on a million photos, keep the parts that know what edges, textures and objects look like, and teach only the last part what our dishes look like. That is <em>transfer learning</em>, and it is how nearly every vision model in production is made.</p>
+
+    <h2 id="l09-pretrained">Borrowed eyes</h2>
+    <p><code>torchvision.models</code> ships architectures with weights trained on ImageNet, 1.3 million photos of a thousand everyday things. ResNet-18 is the small one: 11.7 million parameters in a stem, four stages of residual blocks, a global average pool and a 512-to-1000 linear head. The early stages respond to edges and textures, which are the same in any photograph; the late stages respond to object parts and whole objects, which are closer to ImageNet's categories. The split between "general" and "specific" is what decides what to freeze.</p>
+
+    <div class="widget" data-widget="featureHierarchy"></div>
+
+<pre><code>from torchvision import models
+weights = models.ResNet18_Weights.DEFAULT
+model = models.resnet18(weights=weights)              <span class="c"># downloads 45 MB once</span>
+sum(p.numel() for p in model.parameters())           <span class="out">11689512</span>
+model.fc                                             <span class="out">Linear(in_features=512, out_features=1000, bias=True)   ImageNet's thousand classes</span>
+weights.transforms()                                 <span class="out">resize 256, centre crop 224, normalize with mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225]</span></code></pre>
+    <p>The transforms matter as much as the weights: the network learned on images normalized with those exact means and standard deviations, so ours must be too. Use <code>weights.transforms()</code> rather than typing the numbers.</p>
+
+    <h2 id="l09-freeze">Freeze, replace the head, train</h2>
+    <p>Three moves. <code>requires_grad_(False)</code> on every parameter: autograd stops tracking them, no gradients, no updates, no memory for them. Then replace <code>model.fc</code> with a new <code>nn.Linear(512, n_classes)</code>; a new layer requires gradients by default, so it is the only thing that trains. Then the toolkit's <code>fit_v2</code>, unchanged. Since the backbone is frozen, its 512-d output for each image never changes, which allows a trick: run the backbone once over the whole dataset, cache the features, and train the head on them. Seconds instead of minutes, and you can try ten heads.</p>
+
+    <div class="widget" data-widget="topkDemo"></div>
+
+<pre><code>def build_transfer_model(n_classes, pretrained=True, trainable_blocks=0):
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT if pretrained else None)
+    freeze(model)                                              <span class="c"># every parameter: requires_grad_(False)</span>
+    model.fc = nn.Linear(model.fc.in_features, n_classes)      <span class="c"># 512 -> n_classes, trainable</span>
+    for name in ["layer4", "layer3", "layer2", "layer1"][:trainable_blocks]:
+        getattr(model, name).requires_grad_(True)              <span class="c"># unfreeze from the top down</span>
+    return model
+
+model = build_transfer_model(101)
+count_parameters(model)                              <span class="out">51813    of 11,228,325: 0.5% of the network trains</span>
+
+features, labels = extract_features(model, train_loader, device)   <span class="c"># fc swapped for nn.Identity for the pass</span>
+features.shape                                       <span class="out">torch.Size([3000, 512])</span></code></pre>
+
+    <h2 id="l09-finetune">Fine-tuning with two learning rates</h2>
+    <p>Once the head is good, unfreezing the top block, <code>layer4</code>, lets the network adapt its object-level features to dishes. Those weights are already good, so they should move gently, while the new head can still move fast. An optimizer accepts <em>parameter groups</em>, each with its own settings, and that is how both happen at once: the head at <code>1e-3</code>, the backbone at <code>1e-4</code>. Fine-tune everything at the head's rate and the pretrained features are overwritten in the first epoch, which the break-it step below will show you.</p>
+<pre><code>def param_groups(model, lr_head, lr_backbone):
+    head = [p for n, p in model.named_parameters() if n.startswith("fc.") and p.requires_grad]
+    backbone = [p for n, p in model.named_parameters() if not n.startswith("fc.") and p.requires_grad]
+    return [{"params": head, "lr": lr_head}, {"params": backbone, "lr": lr_backbone}]
+
+model = build_transfer_model(101, trainable_blocks=1)
+count_parameters(model)                              <span class="out">8445541   layer4 plus the head</span>
+optimizer = torch.optim.Adam(param_groups(model, lr_head=1e-3, lr_backbone=1e-4))</code></pre>
+
+    <h2 id="l09-evaluate">Evaluating honestly</h2>
+    <p>Accuracy is one number and a hundred classes hide inside it. A <em>confusion matrix</em> counts, for every true class, what the model called it: rows are truth, columns are predictions, the diagonal is what went right. From it come per-class accuracy (diagonal over row sums), which shows the classes the model cannot do, and the most-confused pairs, which show you what to look at: two dishes that are visually near-identical, or two classes with mislabelled data. <em>Top-k accuracy</em> asks whether the truth is among the k highest logits; for near-twins like pho and ramen, top-5 is the number papers quote, and the gap between top-1 and top-5 says how often the model is close but not exact.</p>
+
+    <div class="widget" data-widget="confusionExplorer"></div>
+
+<pre><code>cm = confusion_matrix(preds, y, n_classes=101)      <span class="out">tensor (101, 101), int64; cm.sum() == len(y)</span>
+per_class_accuracy(cm)                               <span class="out">tensor (101,) : diagonal / row sums</span>
+most_confused(cm, k=5)                               <span class="out">[(true, predicted, count), ...]   the pairs worth a look</span>
+top_k_accuracy(logits, y, k=5)                       <span class="out">a float; always ≥ top-1</span></code></pre>
+
+    <h2 id="l09-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="51813" data-explain="512 × 101 weights plus 101 biases. The backbone's 11 million stay frozen." data-hint="in × out + out.">
+      <div class="quiz-row"><span class="q">1. ResNet-18's head is replaced with <code>nn.Linear(512, 101)</code> and everything else is frozen. How many parameters train?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="224" data-explain="ResNet18_Weights.DEFAULT.transforms() resizes to 256 and centre-crops 224; the network was trained at that size." data-hint="The size in weights.transforms().">
+      <div class="quiz-row"><span class="q">2. What is the crop size of the pretrained ResNet-18's preprocessing?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="3" data-explain="The truth is the third-highest logit, so it counts as correct for k = 3 and above." data-hint="At what k does the true class enter the top k?">
+      <div class="quiz-row"><span class="q">3. For one image the true class has the third-highest logit. What is the smallest k for which top-k accuracy counts it as correct?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="0.84" data-explain="Per-class accuracy is the diagonal entry over the row sum: 42 / 50." data-hint="Diagonal / row sum.">
+      <div class="quiz-row"><span class="q">4. The confusion matrix row for "ramen" sums to 50 and its diagonal entry is 42. What is ramen's per-class accuracy?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="8445541" data-explain="layer4's 8,393,728 parameters plus the head's 51,813." data-hint="layer4 + head, from the stage widget.">
+      <div class="quiz-row"><span class="q">5. <code>build_transfer_model(101, trainable_blocks=1)</code>: how many parameters train?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="10" data-explain="Head 1e-3, backbone 1e-4: the pretrained weights move ten times more carefully than the fresh ones." data-hint="Divide the two learning rates.">
+      <div class="quiz-row"><span class="q">6. <code>param_groups(model, lr_head=1e-3, lr_backbone=1e-4)</code>. How many times larger is the head's learning rate?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l09-build">Build it</h2>
+    <p>One new file, <code>forkcast/transfer.py</code>. The tests build ResNet-18 with random weights so they never download; the notebook uses the pretrained ones on real dish photos.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 9 notebook on a GPU runtime and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson09.ipynb" href="#lesson-09/build">Open lesson09.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Load twenty dishes and the pretrained network</h3>
+        <p>The notebook streams twenty Food-101 classes, 150 training and 50 validation photos each, at 224×224, normalized with <code>weights.transforms()</code>. Then:</p>
+<pre><code>weights = models.ResNet18_Weights.DEFAULT
+backbone = models.resnet18(weights=weights)
+sum(p.numel() for p in backbone.parameters()), backbone.fc   <span class="out">(11689512, Linear(512, 1000))</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>freeze</code> and <code>build_transfer_model</code></h3>
+<pre><code>model = transfer.build_transfer_model(20)
+count_parameters(model)                              <span class="out">10260    512 × 20 + 20</span>
+model(x_batch.to(device)).shape                      <span class="out">torch.Size([64, 20])</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Cache the features and train the head in seconds</h3>
+<pre><code>feats, ys = transfer.extract_features(model, train_loader, device)      <span class="c"># one pass through the frozen backbone</span>
+feats.shape                                          <span class="out">torch.Size([3000, 512])</span>
+head_loader = DataLoader(TensorDataset(feats, ys), batch_size=128, shuffle=True)
+head = nn.Linear(512, 20)
+train.fit_v2(head, head_loader, val_feat_loader, epochs=30, lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device)</code></pre>
+        <p class="expect">Expected: thirty epochs in well under a minute, and a validation accuracy several times Lesson 7's from-scratch number on the same photos. Copy the head's weights into <code>model.fc</code> and the full model now classifies pixels.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>param_groups</code> and fine-tune layer4</h3>
+<pre><code>model = transfer.build_transfer_model(20, trainable_blocks=1)
+model.fc.load_state_dict(head.state_dict())          <span class="c"># start from the trained head</span>
+optimizer = torch.optim.Adam(transfer.param_groups(model, lr_head=1e-3, lr_backbone=1e-4))</code></pre>
+        <p>The notebook runs three epochs with the toolkit's epoch function and the two-group optimizer (<code>fit_v2</code> builds its own optimizer, so this step uses <code>train_one_epoch_amp</code> and <code>evaluate_loader</code> directly). Expect a further gain of a few points; the top block has adapted to dishes.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>top_k_accuracy</code> and <code>confusion_matrix</code>, then look</h3>
+<pre><code>logits, y = collect_logits(model, val_loader, device)
+transfer.top_k_accuracy(logits, y, 1), transfer.top_k_accuracy(logits, y, 5)
+cm = transfer.confusion_matrix(logits.argmax(1), y, 20)
+transfer.per_class_accuracy(cm).sort()               <span class="c"># the dishes the model cannot do</span>
+[(names[i], names[j], n) for i, j, n in transfer.most_confused(cm, 5)]</code></pre>
+        <p class="expect">Expected: the confused pairs make sense when you see them, visually similar dishes, or two names for nearly the same thing. Show a grid of the misclassified photos for the top pair; some will be labelling noise in the dataset itself.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: fine-tune everything at the head's learning rate</h3>
+        <p><code>build_transfer_model(20, trainable_blocks=4)</code> with a single learning rate of <code>1e-3</code> for all 11 million parameters. Validation accuracy drops below the frozen-backbone result within an epoch or two: the pretrained features, which took a million images to learn, are wiped by large steps computed from three thousand. Pretrained weights are a resource; the small backbone learning rate is how you spend it slowly.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_09.py -q
+<span class="out">7 passed in 4.8s</span>
+!pytest -m fast -q
+<span class="out">69 passed, … skipped, 1 deselected in 17.4s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 9: transfer learning and evaluation"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l09-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn</dt>
+      <dd>You froze the model after replacing the head, so the new head is frozen too. Freeze first, then replace.</dd>
+
+      <dt>Accuracy is near chance even though the loss falls on the cached features</dt>
+      <dd>The validation images were not passed through <code>weights.transforms()</code>, or were normalized with different statistics. The backbone expects ImageNet normalization exactly.</dd>
+
+      <dt>Validation accuracy drops when fine-tuning starts</dt>
+      <dd>The backbone's learning rate is too high, or you fine-tune with <code>model.train()</code> on BatchNorm layers with tiny batches, which corrupts their running statistics. Lower the rate; consider keeping the backbone in eval mode while fine-tuning the top block.</dd>
+
+      <dt>ValueError: some parameters appear in more than one parameter group</dt>
+      <dd><code>param_groups</code> put a parameter in both lists. Split on the name prefix <code>fc.</code> exactly, and skip frozen parameters.</dd>
+
+      <dt>RuntimeError: mat1 and mat2 shapes cannot be multiplied (64x512 and 2048x20)</dt>
+      <dd>The head was sized for a different backbone. ResNet-18 and -34 pool to 512; ResNet-50 and larger to 2048. Read <code>model.fc.in_features</code> instead of assuming.</dd>
+
+      <dt>Downloading the weights fails</dt>
+      <dd>Colab has internet; CI does not and must not. Tests use <code>pretrained=False</code>; if you wrote a test that needs the real weights, mark it <code>slow</code>.</dd>
+    </dl>
+
+    <h2 id="l09-stretch">Stretch</h2>
+    <p>Swap ResNet-18 for <code>models.efficientnet_b0</code> (its head is <code>model.classifier[1]</code>) and compare accuracy and seconds per epoch. Then try <code>trainable_blocks=2</code> with a third parameter group at <code>3e-5</code> for <code>layer3</code>, and plot per-class accuracy for the three setups side by side; the classes that gain from fine-tuning are the ones furthest from ImageNet.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-08"><span class="dir">Previous</span><span class="title">Lesson 8: GPU training for real</span></a>
+      <a class="next" href="#lesson-10"><span class="dir">Next</span><span class="title">Lesson 10: Debugging and interpreting models</span></a>
+    </nav>
+  </main>
+</article>

@@ -1,0 +1,25 @@
+# Student definition-of-done checks.
+# Runs on every push to a student's copy of the repository: red until the
+# lesson's functions are implemented, green when they are. On the course
+# repository itself the starter code is intentionally unfinished, so this job
+# is skipped there (reference.yml covers the solutions).
+name: DoD checks
+
+on: [push, pull_request]
+
+jobs:
+  dod:
+    if: ${{ github.event.repository.is_template != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU-only PyTorch
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the package and test tools
+        run: pip install -e ".[dev]"
+      - name: Fast tests from every lesson so far
+        run: pytest -m fast -q

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forkcast"
+version = "0.0.1"
+description = "The machine-learning backend of Forkcast, a fictional food-delivery app, built one lesson at a time"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "numpy>=1.26",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "tensorboard>=2.15"]
+
+[tool.setuptools.packages.find]
+include = ["forkcast*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Stretch goals and long training runs are opt-in. `-m stretch` or `-m slow` on
+# the command line overrides this default.
+addopts = "-m 'not stretch and not slow' -ra"
+markers = [
+  "fast: quick CPU checks; the DoD workflow runs these on every push",
+  "gpu: needs a CUDA device; skipped automatically when there is none",
+  "stretch: optional stretch-goal exercises; run with -m stretch",
+  "slow: long training runs; run on purpose with -m slow",
+]

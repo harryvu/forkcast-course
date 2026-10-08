@@ -1,0 +1,304 @@
+<!-- Lesson 03: nn.Module, nn.Linear and optimizers. Section ids are prefixed l03-; rail links use #lesson-03/<section>. -->
+<article class="page" data-lesson="03" data-title="nn.Module, nn.Linear and optimizers" id="lesson-03" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-03/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-03/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-03/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-03/module" data-section="module">The model becomes an object</a></li>
+        <li><a href="#lesson-03/optim" data-section="optim">The optimizer</a></li>
+        <li><a href="#lesson-03/normalize" data-section="normalize">Why normalize</a></li>
+        <li><a href="#lesson-03/toolkit" data-section="toolkit">The toolkit</a></li>
+        <li><a href="#lesson-03/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-03/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-03/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-03/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">3</div>
+      <div>
+        <h1>nn.Module, nn.Linear and optimizers</h1>
+        <p class="meta">Part 1, Foundations. About 2 hours. No GPU needed. <b>You'll leave with</b> the model as a proper PyTorch object, the training loop in the form you will use for the rest of the course, and the fix for the learning-rate trouble of the last two lessons.</p>
+      </div>
+    </div>
+
+    <section id="l03-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Write a model as an <code>nn.Module</code> with <code>__init__</code> and <code>forward</code>, and say what <code>nn.Linear</code> stores and in which shape.</li>
+        <li>Replace the hand-written update with <code>torch.optim</code> and read the three-line step: <code>zero_grad</code>, <code>backward</code>, <code>step</code>.</li>
+        <li>Explain why unscaled features make one learning rate fail, and normalize them with statistics from the training data only.</li>
+        <li>Put <code>train_one_epoch</code>, <code>evaluate</code> and <code>fit</code> into the shared package, where every later lesson reuses them.</li>
+        <li>Save a model's <code>state_dict</code> and reload it into a fresh model with identical predictions.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>nn.Module</code></li><li><code>super().__init__()</code></li><li><code>forward</code></li><li><code>nn.Linear</code></li><li><code>.weight .bias</code></li>
+        <li><code>.parameters()</code></li><li><code>nn.MSELoss</code></li><li><code>torch.optim.SGD / Adam</code></li><li><code>optimizer.zero_grad() / .step()</code></li>
+        <li><code>model.train() / .eval()</code></li><li><code>@torch.no_grad()</code></li><li><code>state_dict / load_state_dict</code></li><li><code>torch.save / torch.load</code></li>
+      </ul>
+    </section>
+
+    <section id="l03-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l03-dod-tests" data-dod="tests">
+          <label for="l03-dod-tests">The Lesson 3 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_03.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l03-dod-fast" data-dod="fast">
+          <label for="l03-dod-fast">Everything so far still passes: <code>27 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l03-dod-quiz" data-dod-auto="quiz">
+          <label for="l03-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l03-dod-push" data-dod="push">
+          <label for="l03-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 3 is done. Your training loop is now the real one; the rest of the course changes what goes into it.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l03-project">Where we are</h2>
+    <p>You have a working four-feature model and a loop that trains it. Two things about it would not survive contact with the rest of the course. The knobs are loose tensors you pass around by hand, which gets unmanageable the moment there are more than two. And the learning rate has been a nuisance since Lesson 1: 0.01 works, 0.1 explodes, and in Lesson 2 you had to drop to 0.005 for no better reason than that distances are bigger numbers than rain flags. This lesson fixes both, and leaves behind three functions in <code>forkcast/train.py</code> that every later lesson calls.</p>
+
+    <h2 id="l03-module">The model becomes an object</h2>
+    <p>An <code>nn.Module</code> is a class that owns parameters and knows how to compute with them. You write two methods: <code>__init__</code> creates the layers, <code>forward</code> says how input flows through them. Everything else, collecting the parameters for the optimizer, saving and loading, moving to a GPU, comes for free. The one layer you need today is <code>nn.Linear</code>, which is Lesson 2's <code>X @ w + b</code> as an object. Look at what it holds, and watch the shapes when the output grows.</p>
+
+    <div class="widget" data-widget="linearAnatomy"></div>
+
+<pre><code>from torch import nn
+
+class LinearRegressor(nn.Module):
+    def __init__(self, n_features):
+        super().__init__()                        <span class="c"># always first: this is what registers the parameters</span>
+        self.linear = nn.Linear(n_features, 1)    <span class="c"># weight (1, d), bias (1,), random start</span>
+
+    def forward(self, X):                         <span class="c"># (N, d) -> (N,)</span>
+        return self.linear(X).squeeze(-1)         <span class="c"># nn.Linear gives (N, 1); y is (N,)</span>
+
+model = LinearRegressor(4)
+model(X).shape                                    <span class="out">torch.Size([400])    calling the model runs forward()</span>
+model.linear.weight                               <span class="out">tensor([[-0.004, 0.268, -0.412, -0.368]], requires_grad=True)</span>
+sum(p.numel() for p in model.parameters())        <span class="out">5</span></code></pre>
+    <p>That <code>squeeze(-1)</code> is the Lesson 1 silent bug, pre-empted. <code>nn.Linear</code> always returns a trailing dimension of size <code>out_features</code>, here 1. Compare a <span class="shape">(<b class="dim-n">400</b>, 1)</span> prediction with a <span class="shape">(<b class="dim-n">400</b>,)</span> target and broadcasting quietly builds a 400 by 400 table; <code>nn.MSELoss</code> at least warns you about it now. Squeeze, and the shapes agree.</p>
+
+    <h2 id="l03-optim">The optimizer owns the update</h2>
+    <p>In Lesson 2 the update was two lines inside <code>no_grad</code>, one per knob. An optimizer is handed <code>model.parameters()</code> once and applies the update rule to all of them on <code>step()</code>, and zeroes all their gradients on <code>zero_grad()</code>. Your loop shrinks to five lines, and the five lines are the same for a 5-parameter model and a 50-million-parameter one.</p>
+
+    <div class="widget" data-widget="loopStepper"></div>
+
+    <p><code>torch.optim.SGD</code> is exactly Lesson 2's rule, <code>w -= lr * w.grad</code>. <code>torch.optim.Adam</code> keeps a running memory of each parameter's past gradients and scales its own step size per parameter; it is far more forgiving of a badly chosen learning rate and is the default choice for most of this course. Swapping one for the other is one word.</p>
+
+    <h2 id="l03-normalize">Why one learning rate kept failing</h2>
+    <p>Distances run from 0.5 to 10, item counts from 1 to 6, and the rain flag is 0 or 1. The weight on distance feels every step a hundred times more strongly than the weight on rain, because the gradient for each weight is scaled by its feature's size. The loss is still a bowl, but a long narrow one: a step small enough to be safe along the steep direction crawls along the shallow one. Standardize every feature to mean 0 and standard deviation 1 and the bowl becomes round. Run both with the same learning rate.</p>
+
+    <div class="widget" data-widget="conditioning"></div>
+
+<pre><code>class Normalizer:
+    def fit(self, X):                               <span class="c"># learn the statistics from the training data</span>
+        self.mean = X.mean(dim=0)                   <span class="c"># (d,)</span>
+        self.std = X.std(dim=0, correction=0).clamp_min(1e-6)
+        return self
+    def transform(self, X):                         <span class="c"># apply the stored statistics to any data</span>
+        return (X - self.mean) / self.std           <span class="c"># Lesson 0's normalize_columns, made reusable</span>
+
+norm = Normalizer().fit(X)
+norm.mean, norm.std                                 <span class="out">tensor([5.21, 3.52, 0.31, 0.25]), tensor([2.74, 1.71, 0.46, 0.43])</span>
+Xn = norm.transform(X)</code></pre>
+    <p>Two rules. The statistics come from the training data and are then <em>applied</em> to validation and test data, never recomputed on them; Lesson 5 explains the leak that happens otherwise. And a model trained on normalized inputs expects normalized inputs forever: the <code>Normalizer</code> is part of the model, and ships with it in Lesson 15.</p>
+
+    <h2 id="l03-toolkit">The toolkit</h2>
+    <p>Three functions go into <code>forkcast/train.py</code> and stay there. <code>train_one_epoch</code> is one pass over the data: the five lines above, plus <code>model.train()</code> at the top. <code>evaluate</code> measures the loss without learning, under <code>@torch.no_grad()</code>, with <code>model.eval()</code>. Right now the two mode switches do nothing; from Lesson 5 dropout behaves differently in each, and forgetting them is a classic error that this habit prevents. <code>fit</code> builds the optimizer and loops. And two helpers save and load a <code>state_dict</code>, the dictionary of every parameter tensor by name.</p>
+<pre><code>model.state_dict().keys()                          <span class="out">odict_keys(['linear.weight', 'linear.bias'])</span>
+torch.save(model.state_dict(), "linear.pt")        <span class="c"># numbers only, no code</span>
+fresh = LinearRegressor(4)
+fresh.load_state_dict(torch.load("linear.pt", weights_only=True))
+torch.equal(fresh(X), model(X))                    <span class="out">True</span></code></pre>
+
+    <h2 id="l03-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="1, 4" data-explain="nn.Linear stores weight as (out_features, in_features) and transposes it when applied." data-hint="out first, in second.">
+      <div class="quiz-row"><span class="q">1. What is <code>nn.Linear(4, 1).weight.shape</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="15" data-explain="A (3, 4) weight is 12 numbers, plus 3 biases." data-hint="Weights are out × in; biases are one per output.">
+      <div class="quiz-row"><span class="q">2. How many parameters does <code>nn.Linear(4, 3)</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="400, 1" data-explain="The layer always keeps a trailing out_features dimension. squeeze(-1) turns it into (400,) to match y." data-hint="What does the layer return before the squeeze?">
+      <div class="quiz-row"><span class="q">3. Inside <code>forward</code>, with <code>X</code> of shape (400, 4), what is the shape of <code>self.linear(X)</code> before the squeeze?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="1.95" data-explain="SGD is Lesson 2's rule: 2.0 − 0.1 × 0.5 = 1.95." data-hint="w − lr × grad.">
+      <div class="quiz-row"><span class="q">4. A parameter is 2.0, its gradient is 0.5, the optimizer is <code>SGD(lr=0.1)</code>. What is the parameter after <code>optimizer.step()</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="1" data-explain="(8.0 − 5.25) / 2.74 ≈ 1.0: an 8 km delivery is one standard deviation longer than average." data-hint="(value − mean) / std, to one decimal.">
+      <div class="quiz-row"><span class="q">5. Distance has mean 5.25 and std 2.74 in the training data. To one decimal, what is the normalized value of 8.0 km?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="2" data-explain="One entry per parameter tensor: linear.weight and linear.bias. The Normalizer's statistics are not in it, which is why it must be saved alongside." data-hint="Count the parameter tensors, not the numbers.">
+      <div class="quiz-row"><span class="q">6. How many entries does <code>LinearRegressor(4).state_dict()</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l03-build">Build it</h2>
+    <p>Three new files: <code>forkcast/model.py</code>, <code>forkcast/preprocess.py</code> and <code>forkcast/train.py</code>. Each has a <code>%%writefile</code> cell in the notebook.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 3 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson03.ipynb" href="#lesson-03/build">Open lesson03.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Meet nn.Linear</h3>
+<pre><code>import torch
+from torch import nn
+from forkcast.data import make_orders, FEATURES, TRUE_WEIGHTS, TRUE_BIAS
+X, y = make_orders(400, seed=0)
+
+layer = nn.Linear(4, 1)
+layer.weight.shape, layer.bias.shape               <span class="out">(torch.Size([1, 4]), torch.Size([1]))</span>
+layer.weight                                       <span class="out">small random numbers, requires_grad=True</span>
+layer(X).shape                                     <span class="out">torch.Size([400, 1])   note the 1</span>
+torch.allclose(layer(X), X @ layer.weight.T + layer.bias)   <span class="out">True</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>LinearRegressor</code> in <code>forkcast/model.py</code></h3>
+        <p>Two lines in <code>__init__</code> (the <code>super().__init__()</code> call and the layer), one in <code>forward</code>. Check: <code>model(X).shape</code> is <span class="shape">(<b class="dim-n">400</b>,)</span>, and <code>model(X)</code> equals <code>X @ model.linear.weight[0] + model.linear.bias[0]</code>.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>Normalizer</code> in <code>forkcast/preprocess.py</code></h3>
+        <p><code>fit</code> stores the column mean and std (with <code>correction=0</code> and <code>clamp_min(1e-6)</code>) and returns <code>self</code>; <code>transform</code> uses them. Check that <code>norm.transform(X).mean(dim=0)</code> is four zeros and the std is four ones, and that <code>norm.mean</code> matches the numbers above.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>train_one_epoch</code>, <code>evaluate</code> and <code>fit</code> in <code>forkcast/train.py</code></h3>
+        <p>The docstrings give the order of the lines. <code>train_one_epoch</code> returns <code>loss.item()</code> of the loss it just stepped on. <code>fit</code> defaults the loss to <code>nn.MSELoss()</code>, builds <code>optimizer_cls(model.parameters(), lr=lr)</code>, and returns one float per epoch.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Fit on normalized features</h3>
+<pre><code>from forkcast.model import LinearRegressor
+from forkcast.preprocess import Normalizer
+from forkcast import train
+
+norm = Normalizer().fit(X)
+Xn = norm.transform(X)
+torch.manual_seed(0)
+model = LinearRegressor(4)
+losses = train.fit(model, Xn, y, epochs=300, lr=0.1)
+losses[0], losses[-1]                              <span class="out">(1285.1, 3.87)   below 5 by epoch 16</span>
+
+model.linear.weight[0], model.linear.bias          <span class="out">tensor([9.33, 2.74, 1.81, 2.57]), tensor([34.05])</span></code></pre>
+        <p>Those weights look nothing like <code>TRUE_WEIGHTS</code>, and they are right: they are minutes per <em>standard deviation</em> of each feature, and the bias is the average delivery time. Undo the scaling to compare with the generator:</p>
+<pre><code>w, b = model.linear.weight[0].detach(), model.linear.bias[0].detach()
+w / norm.std                                       <span class="out">tensor([3.40, 1.60, 3.93, 5.99])   truth [3.5, 1.5, 4.0, 6.0]</span>
+b - (w * norm.mean / norm.std).sum()               <span class="out">tensor(8.04)                       truth 8.0</span></code></pre>
+        <p class="expect">Expected: a learning rate of 0.1, twenty times what Lesson 2 needed, converging in a few dozen epochs instead of thousands.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: the same learning rate on raw features</h3>
+<pre><code>torch.manual_seed(0)
+raw = train.fit(LinearRegressor(4), X, y, epochs=60, lr=0.1)
+raw[:4], raw[-1]                                   <span class="out">([1234.0, 85257.7, 6026245.0, 426079424.0], nan)</span>
+
+torch.manual_seed(0)
+adam = train.fit(LinearRegressor(4), X, y, epochs=300, lr=0.1, optimizer_cls=torch.optim.Adam)
+adam[-1]                                           <span class="out">5.47   Adam copes with raw features; normalization still wins</span></code></pre>
+        <p>Same model, same data, same learning rate, different scale: SGD explodes in four steps. Adam's per-parameter step sizes rescue it, which is a good reason to prefer Adam, but not a reason to skip normalization: the normalized SGD run reached 3.87.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>save</code> and <code>load</code>, and round-trip the model</h3>
+<pre><code>train.save(model, "linear.pt")
+fresh = train.load(LinearRegressor(4), "linear.pt")
+torch.equal(fresh(Xn), model(Xn))                  <span class="out">True</span></code></pre>
+        <p>The file holds numbers, not code. Loading needs a model of the same shape to pour them into, which is why <code>load</code> takes a model as its first argument.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_03.py -q
+<span class="out">7 passed in 2.1s</span>
+!pytest -m fast -q
+<span class="out">27 passed, … skipped, 1 deselected in 3.4s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 3: nn.Module, optimizers, normalization"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l03-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>AttributeError: cannot assign module before Module.__init__() call</dt>
+      <dd><code>self.linear = ...</code> ran before <code>super().__init__()</code>. The parent constructor sets up the registry that stores layers; call it first.</dd>
+
+      <dt>UserWarning: Using a target size (torch.Size([400])) that is different to the input size (torch.Size([400, 1]))</dt>
+      <dd>The prediction still has its trailing 1. Add <code>.squeeze(-1)</code> in <code>forward</code>. This warning is the loud version of Lesson 1's silent 200×200 bug; treat it as an error.</dd>
+
+      <dt>RuntimeError: mat1 and mat2 shapes cannot be multiplied (400x1 and 4x1)</dt>
+      <dd><code>nn.Linear(4, 1)</code> expects inputs with 4 columns. You passed a single feature or a transposed tensor.</dd>
+
+      <dt>TypeError: forward() takes 1 positional argument but 2 were given</dt>
+      <dd><code>def forward(X)</code> is missing <code>self</code>.</dd>
+
+      <dt>RuntimeError: Error(s) in loading state_dict for LinearRegressor: size mismatch for linear.weight</dt>
+      <dd>The model you are loading into was built with a different <code>n_features</code> than the one that was saved. The file holds numbers only; the shapes must already agree.</dd>
+
+      <dt>The loss is nan after a few epochs</dt>
+      <dd>Raw features with a learning rate meant for normalized ones. Normalize, or lower the rate, or switch to Adam. If it still happens, check that <code>zero_grad()</code> is in the loop.</dd>
+
+      <dt>Predictions on new data are wildly wrong, training loss was fine</dt>
+      <dd>The new data was not passed through the same <code>Normalizer</code>, or a new one was fitted on it. The model expects inputs scaled with the <em>training</em> statistics.</dd>
+    </dl>
+
+    <h2 id="l03-stretch">Stretch</h2>
+    <p>Two experiments. First, plot the loss curves of SGD and Adam on normalized features at <code>lr = 0.1</code>, then at <code>lr = 0.01</code>; notice which one cares. Second, build the model with <code>nn.Linear(4, 1)</code> replaced by <code>nn.Sequential(nn.Linear(4, 1))</code> and look at <code>state_dict().keys()</code>; the names tell you how PyTorch addresses layers inside containers, which Lesson 4 relies on.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-02"><span class="dir">Previous</span><span class="title">Lesson 2: Autograd and many features</span></a>
+      <a class="next" href="#lesson-04"><span class="dir">Next</span><span class="title">Lesson 4: The first neural network</span></a>
+    </nav>
+  </main>
+</article>

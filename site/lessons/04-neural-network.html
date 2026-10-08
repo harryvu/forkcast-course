@@ -1,0 +1,291 @@
+<!-- Lesson 04: The first neural network. Section ids are prefixed l04-; rail links use #lesson-04/<section>. -->
+<article class="page" data-lesson="04" data-title="The first neural network" id="lesson-04" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-04/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-04/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-04/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-04/limits" data-section="limits">Where a line fails</a></li>
+        <li><a href="#lesson-04/bend" data-section="bend">Bending the line</a></li>
+        <li><a href="#lesson-04/stack" data-section="stack">Stacking layers</a></li>
+        <li><a href="#lesson-04/capacity" data-section="capacity">Capacity</a></li>
+        <li><a href="#lesson-04/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-04/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-04/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-04/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">4</div>
+      <div>
+        <h1>The first neural network</h1>
+        <p class="meta">Part 1, Foundations. About 2 hours. No GPU needed. <b>You'll leave with</b> a model that bends, an understanding of what a hidden layer and an activation actually do, and the word "neural network" finally attached to something you built.</p>
+      </div>
+    </div>
+
+    <section id="l04-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Show, with a residual plot, that a straight-line model is missing structure in the data.</li>
+        <li>Explain what a hidden layer and a ReLU do, in the words "each unit is a ramp with its own kink, and the output is their sum".</li>
+        <li>Explain why two linear layers with nothing between them are still one linear layer.</li>
+        <li>Build an <code>MLP</code> from a tuple of hidden widths with <code>nn.Sequential</code>, and count its parameters.</li>
+        <li>Train it with the toolkit from Lesson 3 and reach the noise floor a line cannot reach.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>nn.Sequential</code></li><li><code>nn.ReLU</code></li><li><code>nn.Identity</code></li><li><code>torch.relu</code></li><li><code>nn.Linear(in, hidden)</code></li>
+        <li><code>model.net[i]</code></li><li><code>state_dict names like net.2.weight</code></li><li><code>p.numel()</code></li>
+      </ul>
+    </section>
+
+    <section id="l04-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l04-dod-tests" data-dod="tests">
+          <label for="l04-dod-tests">The Lesson 4 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_04.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l04-dod-fast" data-dod="fast">
+          <label for="l04-dod-fast">Everything so far still passes: <code>34 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l04-dod-quiz" data-dod-auto="quiz">
+          <label for="l04-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l04-dod-push" data-dod="push">
+          <label for="l04-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 4 is done. You have trained a neural network, and you know which three lines make it one.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l04-project">Where we are</h2>
+    <p>The deliveries so far were made by a rule that <em>is</em> a straight line, so a straight line could learn it perfectly. Real deliveries are not like that. Rain does not add a fixed four minutes; it slows every kilometre. Past seven kilometres, Forkcast riders have to leave the main road for the bike-lane detour and the minutes climb faster. This lesson switches the generator to those rules with <code>make_orders(nonlinear=True)</code>, watches the linear model fail, and builds the first model that can bend.</p>
+
+    <h2 id="l04-limits">Where a line fails, and how to see it</h2>
+    <p>Fit Lesson 3's <code>LinearRegressor</code> to the new deliveries and the loss stops at about 15, far above the noise floor of 4. The loss number says the model is missing something; a <em>residual plot</em> says what. Subtract actual minutes from predicted minutes and plot the difference against distance. A model that has captured everything leaves a shapeless band around zero. This one does not.</p>
+
+    <div class="widget" data-widget="residuals"></div>
+
+    <p>This plot is the most useful diagnostic you will own. Any time a loss plateaus above where you think it should, plot the residuals against each feature. A trend means there is a pattern left to learn and the model cannot express it.</p>
+
+    <h2 id="l04-bend">Bending the line</h2>
+    <p>A <em>hidden layer</em> is an <code>nn.Linear</code> whose outputs are not the answer. With one input and <span class="shape dim-w">H</span> hidden units it computes <span class="shape dim-w">H</span> different lines of the input. Then an <em>activation</em> changes each one; the usual choice is ReLU, <code>max(0, z)</code>, which clips negatives to zero and turns each line into a ramp: flat, then rising (or falling) from the point where its line crosses zero, its <em>kink</em>. The output layer is one more <code>nn.Linear</code> that adds the ramps up with its own weights. A sum of ramps is a bent line, with up to <span class="shape dim-w">H</span> bends, placed wherever the data needs them. Train one.</p>
+
+    <div class="widget" data-widget="netPlayground"></div>
+
+    <p>Now set the activation to <em>none</em> and train again. The fit is a straight line and stays one, with 1 unit or 16. That is the whole reason activations exist, and it is the next section.</p>
+
+    <h2 id="l04-stack">Stacking layers</h2>
+    <p>Two linear layers in a row compute <code>W2 (W1 x + b1) + b2</code>, which is <code>(W2 W1) x + (W2 b1 + b2)</code>: a single matrix times x plus a single bias. However many linear layers you stack, the result is one linear layer with a lot of redundant parameters. The activation between them is what stops the collapse, because <code>max(0, ·)</code> is not a matrix. So the recipe for a network is Linear, activation, Linear, activation, Linear, with no activation after the last layer, since minutes can be any number and ReLU would forbid negatives.</p>
+<pre><code>class MLP(nn.Module):
+    def __init__(self, n_features, hidden=(32, 32), activation=nn.ReLU):
+        super().__init__()
+        layers, width = [], n_features
+        for h in hidden:
+            layers.append(nn.Linear(width, h))      <span class="c"># (N, width) -> (N, h)</span>
+            layers.append(activation())             <span class="c"># the bend</span>
+            width = h
+        layers.append(nn.Linear(width, 1))          <span class="c"># no activation after the output</span>
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, X):
+        return self.net(X).squeeze(-1)
+
+MLP(4, (32, 32)).net
+<span class="out">Sequential(
+  (0): Linear(in_features=4, out_features=32, bias=True)
+  (1): ReLU()
+  (2): Linear(in_features=32, out_features=32, bias=True)
+  (3): ReLU()
+  (4): Linear(in_features=32, out_features=1, bias=True)
+)</span></code></pre>
+    <p><code>nn.Sequential</code> runs its children in order and is itself a module, so <code>state_dict</code> names the parameters <code>net.0.weight</code>, <code>net.2.weight</code>, <code>net.4.weight</code>: the ReLUs at positions 1 and 3 have nothing to save. The shapes chain: <span class="shape">(<b class="dim-n">N</b>, 4)</span> becomes <span class="shape">(<b class="dim-n">N</b>, 32)</span>, stays <span class="shape">(<b class="dim-n">N</b>, 32)</span>, becomes <span class="shape">(<b class="dim-n">N</b>, 1)</span>, and the squeeze makes it <span class="shape">(<b class="dim-n">N</b>,)</span>. Nothing else in the training loop changes: <code>train.fit</code> from Lesson 3 takes this model as it took the last one.</p>
+
+    <h2 id="l04-capacity">Capacity</h2>
+    <p>Parameters are what a network has to bend with. Count them: a <code>Linear(in, out)</code> has <code>in × out + out</code>, and the total for 4 → 32 → 32 → 1 is 160 + 1056 + 33 = 1249, against the 5 of the straight line. Here is what the same recipe learns on the new deliveries at different widths, with Adam at <code>lr = 0.01</code> for 300 epochs:</p>
+<pre><code><span class="out">LinearRegressor         5 parameters    loss 15.43
+MLP(4, (8,))           49 parameters    loss 24.44   too small to bend enough, and slow to train
+MLP(4, (32,))         193 parameters    loss  7.16
+MLP(4, (32, 32))     1249 parameters    loss  5.44
+MLP(4, (64, 64))     4545 parameters    loss  4.79   the noise floor is about 4</span></code></pre>
+    <p>More capacity, lower loss, all the way down to the noise. That looks like a rule you can follow forever. It is not: these numbers are the loss on the data the model trained on, and Lesson 5 shows what happens to the loss on deliveries it has never seen when you keep turning capacity up.</p>
+
+    <h2 id="l04-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="160" data-explain="4 × 32 weights plus 32 biases." data-hint="in × out + out.">
+      <div class="quiz-row"><span class="q">1. How many parameters does <code>nn.Linear(4, 32)</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="1249" data-explain="160 + (32 × 32 + 32) + (32 + 1) = 160 + 1056 + 33." data-hint="Three Linear layers; the ReLUs have no parameters.">
+      <div class="quiz-row"><span class="q">2. How many parameters does <code>MLP(4, (32, 32))</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="2000, 1" data-explain="The last Linear has out_features=1, so the Sequential returns (N, 1); forward squeezes it to (N,)." data-hint="What does the final layer's out_features do to the shape?">
+      <div class="quiz-row"><span class="q">3. <code>X</code> has shape (2000, 4). What is the shape of <code>MLP(4, (32, 32)).net(X)</code>, before the squeeze?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="0, 0, 3" data-explain="ReLU clips every negative to zero and leaves positives alone." data-hint="max(0, z) for each number.">
+      <div class="quiz-row"><span class="q">4. What is <code>torch.relu(torch.tensor([-2., 0., 3.]))</code>?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="[…]" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="5" data-explain="W2 W1 is a (1, 4) matrix and W2 b1 + b2 is one number: exactly a Linear(4, 1), with 5 numbers that matter. The other 160 are redundant." data-hint="Collapse the two layers into one and count that layer.">
+      <div class="quiz-row"><span class="q">5. <code>nn.Sequential(nn.Linear(4, 32), nn.Linear(32, 1))</code> has 193 parameters. How many parameters does the single linear model it is equivalent to have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="8" data-explain="Each ReLU unit contributes one kink, at the point where its own line crosses zero. Eight ramps, at most eight bends." data-hint="One kink per hidden unit.">
+      <div class="quiz-row"><span class="q">6. A network with one input, one hidden layer of 8 ReLU units and one output: at most how many times can its fit bend?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l04-build">Build it</h2>
+    <p><code>forkcast/model.py</code> grows <code>count_parameters</code> and <code>MLP</code>. <code>forkcast/data.py</code> already has the <code>nonlinear=True</code> switch.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 4 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson04.ipynb" href="#lesson-04/build">Open lesson04.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Load the new deliveries and fit the old model</h3>
+<pre><code>import torch
+from forkcast.data import make_orders, FEATURES
+from forkcast.model import LinearRegressor
+from forkcast.preprocess import Normalizer
+from forkcast import train
+
+X, y = make_orders(2000, seed=0, nonlinear=True)
+norm = Normalizer().fit(X)
+Xn = norm.transform(X)
+
+torch.manual_seed(0)
+lin = LinearRegressor(4)
+losses = train.fit(lin, Xn, y, epochs=300, lr=0.1)
+losses[-1]                                         <span class="out">15.43   stuck well above the noise floor of 4</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Plot the residuals</h3>
+<pre><code>import matplotlib.pyplot as plt
+with torch.no_grad():
+    residual = lin(Xn) - y
+plt.scatter(X[:, 0], residual, s=6, c=X[:, 2])   <span class="c"># colour = rain</span>
+plt.axhline(0, color="k", ls="--"); plt.xlabel("km"); plt.ylabel("prediction − actual");</code></pre>
+        <p class="expect">Expected: the cloud bends downward past 7 km (the model under-predicts far deliveries), and the rainy points drift away from the dry ones as distance grows.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>count_parameters</code> and <code>MLP</code></h3>
+        <p>In the <code>%%writefile forkcast/model.py</code> cell, below <code>LinearRegressor</code>. Build a Python list of layers in a loop over <code>hidden</code>, append the output layer, and wrap the list with <code>nn.Sequential(*layers)</code>. Check:</p>
+<pre><code>from forkcast.model import MLP, count_parameters
+model = MLP(4, (32, 32))
+model.net                                          <span class="out">Sequential(... five modules, as above)</span>
+model(Xn).shape                                    <span class="out">torch.Size([2000])</span>
+count_parameters(model)                            <span class="out">1249</span>
+count_parameters(MLP(4, ()))                       <span class="out">5   no hidden layers: a straight line</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Train it with the toolkit</h3>
+<pre><code>torch.manual_seed(0)
+model = MLP(4, (32, 32))
+losses = train.fit(model, Xn, y, epochs=300, lr=0.01, optimizer_cls=torch.optim.Adam)
+losses[0], losses[-1]                              <span class="out">(1751.0, 5.44)</span>
+plt.plot(losses); plt.yscale("log");</code></pre>
+        <p class="expect">Expected: the first loss is huge, because a fresh network predicts near zero and deliveries average 39 minutes; then a long slide down past where the line stopped. Nothing in <code>train.fit</code> changed.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Plot the residuals again</h3>
+        <p>Same cell as step 3 with <code>model</code> in place of <code>lin</code>. The bend at 7 km is gone and the rainy points sit with the dry ones: a band around zero, no trend. That is what "the model has learned the structure" looks like.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose, twice</h3>
+<pre><code>torch.manual_seed(0)
+flat = train.fit(MLP(4, (32, 32), activation=nn.Identity), Xn, y, epochs=300, lr=0.01, optimizer_cls=torch.optim.Adam)
+flat[-1]                                           <span class="out">15.43   identical to the straight line, with 1249 parameters</span>
+
+torch.manual_seed(0)
+sgd = train.fit(MLP(4, (32, 32)), Xn, y, epochs=300, lr=0.1)
+sgd[-1]                                            <span class="out">nan     Lesson 3's SGD learning rate is too hot for a network</span></code></pre>
+        <p>The first run is the proof of the stacking argument: no activation, no bend, and the extra 1244 parameters buy exactly nothing. The second is a reminder that the learning rate that suited a 5-parameter line does not suit a network; Adam at 0.01 is the safe default from here.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_04.py -q
+<span class="out">7 passed in 3.0s</span>
+!pytest -m fast -q
+<span class="out">34 passed, … skipped, 1 deselected in 5.1s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 4: the first neural network"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l04-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>TypeError: 'ReLU' object is not callable  (or: activation() missing argument)</dt>
+      <dd><code>activation</code> is a class; call it to make a layer, <code>nn.ReLU()</code>. If you passed an instance (<code>MLP(4, (32,), nn.ReLU())</code>), you now have an object being called like a class.</dd>
+
+      <dt>TypeError: list is not a Module subclass</dt>
+      <dd>You assigned the plain Python list to <code>self.net</code>. Wrap it: <code>nn.Sequential(*layers)</code>, with the star.</dd>
+
+      <dt>RuntimeError: mat1 and mat2 shapes cannot be multiplied (2000x32 and 4x32)</dt>
+      <dd>The loop did not update <code>width</code> after each hidden layer, so the second layer was built as <code>Linear(4, 32)</code> instead of <code>Linear(32, 32)</code>.</dd>
+
+      <dt>The loss plateaus near 15, the same as the linear model</dt>
+      <dd>No activation between the layers: you forgot to append it, or appended <code>nn.Identity</code>. Print <code>model.net</code> and look for ReLU.</dd>
+
+      <dt>The network predicts only positive values and the loss is stuck</dt>
+      <dd>An activation after the output layer. The last <code>Linear</code> must be the last module.</dd>
+
+      <dt>Loss is nan</dt>
+      <dd>SGD at Lesson 3's learning rate. Use Adam at 0.01, or SGD at 0.01 or below.</dd>
+    </dl>
+
+    <h2 id="l04-stretch">Stretch</h2>
+    <p>Add a <code>depth</code> experiment: keep the total parameter count near 1249 but change the shape, for example <code>(100,)</code> against <code>(32, 32)</code> against <code>(16, 16, 16, 16)</code>, and compare final losses and the time each takes. Then rebuild <code>MLP</code> with <code>nn.ModuleList</code> and an explicit loop in <code>forward</code> instead of <code>nn.Sequential</code>; same model, different plumbing, and the version you will need when layers stop being a straight chain in Lesson 12.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-03"><span class="dir">Previous</span><span class="title">Lesson 3: nn.Module, nn.Linear and optimizers</span></a>
+      <a class="next" href="#lesson-05"><span class="dir">Next</span><span class="title">Lesson 5: Generalization</span></a>
+    </nav>
+  </main>
+</article>

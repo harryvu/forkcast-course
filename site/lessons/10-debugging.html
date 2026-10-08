@@ -1,0 +1,308 @@
+<!-- Lesson 10 (optional): Debugging and interpreting models. Section ids are prefixed l10-; rail links use #lesson-10/<section>. -->
+<article class="page" data-lesson="10" data-title="Debugging and interpreting models" id="lesson-10" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-10/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-10/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-10/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-10/mistakes" data-section="mistakes">Look at the mistakes</a></li>
+        <li><a href="#lesson-10/balance" data-section="balance">Class balance</a></li>
+        <li><a href="#lesson-10/hooks" data-section="hooks">Hooks</a></li>
+        <li><a href="#lesson-10/gradcam" data-section="gradcam">Grad-CAM</a></li>
+        <li><a href="#lesson-10/calibration" data-section="calibration">Calibration</a></li>
+        <li><a href="#lesson-10/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-10/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-10/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-10/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">10</div>
+      <div>
+        <h1>Debugging and interpreting models</h1>
+        <p class="meta">Part 2, Vision, optional. About 2 hours. GPU runtime for the dish photos. <b>You'll leave with</b> the four questions to ask a classifier that is "pretty good": where exactly is it wrong, is the data lopsided, what is it looking at, and does it know when it does not know.</p>
+      </div>
+    </div>
+
+    <section id="l10-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Pull out a model's most confident mistakes and read a gallery of them for patterns.</li>
+        <li>Measure class imbalance and correct for it with weights in <code>CrossEntropyLoss</code>.</li>
+        <li>Attach a forward hook to any layer, read what it captured, and remove it.</li>
+        <li>Build Grad-CAM from a hook and a gradient, and say where the model looked.</li>
+        <li>Measure calibration with a reliability diagram and expected calibration error.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>register_forward_hook</code></li><li><code>handle.remove()</code></li><li><code>torch.autograd.grad</code></li><li><code>torch.enable_grad</code></li><li><code>Tensor.gather</code></li>
+        <li><code>torch.bincount(weights=)</code></li><li><code>torch.bucketize</code></li><li><code>CrossEntropyLoss(weight=)</code></li><li><code>nonzero / argsort(descending=True)</code></li>
+      </ul>
+    </section>
+
+    <section id="l10-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l10-dod-tests" data-dod="tests">
+          <label for="l10-dod-tests">The Lesson 10 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_10.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l10-dod-fast" data-dod="fast">
+          <label for="l10-dod-fast">Everything so far still passes: <code>76 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l10-dod-quiz" data-dod-auto="quiz">
+          <label for="l10-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l10-dod-push" data-dod="push">
+          <label for="l10-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 10 is done, and so is Part 2. Part 3 teaches the same networks to read.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l10-project">Where we are</h2>
+    <p>Lesson 9 left you with a dish classifier and an accuracy number. In Forkcast that number decides things: whether a restaurant's photo is flagged as mislabelled, whether a search by picture returns the right dishes. Before a model with 80% accuracy touches real users, you need to know what the other 20% looks like, whether it is spread evenly or piled onto two classes, whether the model is reading the dish or the plate, and whether its 95% is really 95%. None of these are in the loss curve. This lesson is the toolkit for finding them.</p>
+
+    <h2 id="l10-mistakes">Look at the mistakes</h2>
+    <p>Start with the most informative errors: the ones the model was sure about. Sort every wrong prediction by the softmax probability of the predicted class and look at the top of the list. A confident mistake is one of two things, a systematic blind spot in the model or a mislabelled image in the data, and a gallery of the top sixteen usually tells you which within a minute. Low-confidence mistakes are the model being honestly unsure; they are expected and less interesting.</p>
+
+    <div class="widget" data-widget="errorGallery"></div>
+
+<pre><code>def misclassified(logits, y, k=16):
+    probs = torch.softmax(logits, dim=1)
+    confidence, predicted = probs.max(dim=1)
+    wrong = (predicted != y).nonzero().flatten()
+    order = wrong[confidence[wrong].argsort(descending=True)][:k]
+    return [(int(i), int(y[i]), int(predicted[i]), float(confidence[i])) for i in order]
+
+picks = misclassified(logits, y, k=16)
+plt.imshow(gallery(images, picks).permute(1, 2, 0))   <span class="c"># the sixteen pictures worth your attention</span></code></pre>
+
+    <h2 id="l10-balance">Class balance</h2>
+    <p>Count the training labels. If pizza has 400 photos and laksa has 40, a model that never predicts laksa loses almost nothing on the training loss, and its 90% accuracy is mostly the common classes. The per-class accuracies from Lesson 9 will show it; the fix is to make rare mistakes expensive. <code>CrossEntropyLoss(weight=w)</code> multiplies each image's loss by its class's weight, and inverse-frequency weights, total divided by classes times count, give every class the same total say regardless of size.</p>
+
+    <div class="widget" data-widget="classBalance"></div>
+
+<pre><code>counts = class_counts(train_labels, n_classes)       <span class="out">tensor([400, 350, 300,  80,  60,  40])</span>
+weights = class_weights(counts)                       <span class="out">tensor([0.5125, 0.5857, 0.6833, 2.5625, 3.4167, 5.1250])   count × weight = 205 for every class</span>
+loss_fn = nn.CrossEntropyLoss(weight=weights.to(device))</code></pre>
+
+    <h2 id="l10-hooks">Hooks: reading a layer without editing the model</h2>
+    <p>A forward hook is a function you attach to a layer; PyTorch calls it every time the layer runs, with the module, its inputs and its output. It is how you look at intermediate tensors in a model you did not write, including every pretrained backbone. Two rules: the output is a tensor still in the graph, so <code>.detach()</code> it if you only want to look, and remove the hook with the handle you were given, or it fires on every forward pass for the rest of the session.</p>
+
+    <div class="widget" data-widget="hookShapes"></div>
+
+<pre><code>def record_activation(model, layer, x):
+    captured = {}
+    def hook(module, inputs, output):
+        captured["out"] = output.detach()
+    handle = layer.register_forward_hook(hook)
+    try:
+        model(x)
+    finally:
+        handle.remove()
+    return captured["out"]
+
+record_activation(model, model.features[6], images).shape   <span class="out">torch.Size([8, 32, 16, 16])</span></code></pre>
+
+    <h2 id="l10-gradcam">Grad-CAM: where did it look?</h2>
+    <p>Take the activations of a late convolutional layer, a stack of 32 grids of 16×16. For the class you care about, ask autograd how its score changes with each activation: one gradient per grid cell. Average those over the grid, and each channel gets a single weight: how much that channel's pattern supports the class. Weight the grids, add them up, keep the positive part, and you have a 16×16 heatmap over the image of the evidence the model used. On the synthetic shapes the heat sits on the shape: inside it averages 0.2 to 0.5, the background under 0.15. On dish photos it tells you whether the model found the food or the fork.</p>
+<pre><code>class GradCAM:
+    def __init__(self, model, layer):
+        self.model, self.activations = model, None
+        self.handle = layer.register_forward_hook(self._capture)
+    def _capture(self, module, inputs, output):
+        self.activations = output                        <span class="c"># left in the graph, on purpose</span>
+    def __call__(self, x, class_idx=None):
+        self.model.eval()
+        with torch.enable_grad():
+            x = x.clone().requires_grad_(True)           <span class="c"># works even when every parameter is frozen</span>
+            logits = self.model(x)
+            if class_idx is None:
+                class_idx = logits.argmax(dim=1)
+            score = logits.gather(1, class_idx.view(-1, 1)).sum()
+            grads, = torch.autograd.grad(score, self.activations)       <span class="c"># (N, 32, 16, 16)</span>
+        weights = grads.mean(dim=(2, 3), keepdim=True)                  <span class="c"># (N, 32, 1, 1)</span>
+        cam = torch.relu((weights * self.activations).sum(dim=1))       <span class="c"># (N, 16, 16)</span>
+        return (cam / cam.flatten(1).max(dim=1).values.clamp_min(1e-8)[:, None, None]).detach()
+    def remove(self):
+        self.handle.remove()</code></pre>
+    <p>Ask for a different class and the map moves: <code>cam(x, class_idx=...)</code> shows what would have supported "circle" in a picture of a cross. On Lesson 9's ResNet, hook <code>model.layer4</code>; its grid is 7×7 for a 224×224 input, and upsampling it over the photo gives the familiar red blob.</p>
+
+    <h2 id="l10-calibration">Calibration: does 90% mean 90%?</h2>
+    <p>A classifier's softmax looks like a probability. Whether it behaves like one is a separate, measurable question: among all predictions made with 90% confidence, were 90% right? Bin predictions by confidence, compute accuracy per bin, and plot it against the diagonal. The weighted average gap is the <em>expected calibration error</em>. Neural networks trained with cross-entropy are usually overconfident, and overconfidence is what hurts in a product: a 95% that is really 70% overrules the human who was right.</p>
+
+    <div class="widget" data-widget="reliabilityDiagram"></div>
+
+<pre><code>probs = torch.softmax(logits, dim=1)
+expected_calibration_error(probs, y)                 <span class="out">0.077    Lesson 7's SmallCNN on the shapes: accuracy 0.925, mean confidence 0.86</span>
+conf, acc, count = reliability_bins(probs, y)
+<span class="out">bin confidence  0.35  0.46  0.55  0.66  0.75  0.85  0.97
+bin accuracy    0.50  0.45  0.46  0.92  0.92  0.96  1.00
+count              2    11    26    24    51    68   218</span></code></pre>
+    <p>Here the model is slightly <em>under</em>confident in the middle bins and well calibrated at the top, which is fine. If the top bin had read 0.97 confidence and 0.80 accuracy, you would reach for the fixes: label smoothing during training, or temperature scaling, a single number fitted on the validation set that divides the logits before the softmax and does nothing to accuracy.</p>
+
+    <h2 id="l10-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="2.5" data-explain="500 / (2 × 100). Class 0 gets 500 / (2 × 400) = 0.625; each class then carries total weight 250." data-hint="total / (n_classes × count).">
+      <div class="quiz-row"><span class="q">1. Training labels: 400 of class 0, 100 of class 1. What is <code>class_weights</code> for class 1?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="16" data-explain="The heatmap lives on the hooked layer's spatial grid; channels are averaged away." data-hint="Which dimensions survive the weighted sum over channels?">
+      <div class="quiz-row"><span class="q">2. Grad-CAM is hooked to a layer whose output is (N, 32, 16, 16). What is the side length of each heatmap?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="0.3" data-explain="With all predictions in one bin, ECE is that bin's |accuracy − confidence| = |0.6 − 0.9|." data-hint="|accuracy − confidence| for the one bin.">
+      <div class="quiz-row"><span class="q">3. Every prediction lands in the 0.9 confidence bin, and 60% of them are right. What is the expected calibration error?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="3" data-explain="hook(module, inputs, output). The inputs come as a tuple, the output as whatever the layer returned." data-hint="module, …, …">
+      <div class="quiz-row"><span class="q">4. How many arguments does a forward hook function receive?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="3" data-explain="bincount counts occurrences of each value: [2, 1, 3, 0] with minlength=4." data-hint="Count the 2s.">
+      <div class="quiz-row"><span class="q">5. <code>class_counts(torch.tensor([0, 0, 2, 1, 2, 2]), n_classes=4)</code>: how many examples of class 2?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="0.09" data-explain="Everything sits in one bin at confidence 0.99 with accuracy 0.90, so the gap is 0.09: an overconfident model." data-hint="One bin again: |0.90 − 0.99|.">
+      <div class="quiz-row"><span class="q">6. A model is right on 90% of 1000 images and reports 0.99 confidence on all of them. Roughly, what is its ECE?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l10-build">Build it</h2>
+    <p>One new file, <code>forkcast/debug.py</code>. <code>reliability_bins</code> and <code>gallery</code> are provided. The tests run on Lesson 7's shapes; the notebook also runs everything on dish photos with Lesson 9's pretrained model.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 10 notebook and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson10.ipynb" href="#lesson-10/build">Open lesson10.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Train the Lesson 7 network and write <code>misclassified</code></h3>
+<pre><code>picks = debug.misclassified(logits, y, k=5)
+[(i, SHAPE_CLASSES[t], SHAPE_CLASSES[p], round(c, 3)) for i, t, p, c in picks]
+<span class="out">[(354, 'cross', 'circle', 0.896), (94, 'cross', 'circle', 0.827), (163, 'cross', 'circle', 0.812), (6, 'cross', 'circle', 0.769), (150, 'cross', 'circle', 0.756)]</span></code></pre>
+        <p class="expect">Expected: one confusion dominates. Show the gallery and look at the crosses: thin arms at small scales look like a blob, which is a circle to this network. That is a model limitation with a known fix, larger images or a deeper network, not label noise.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>class_counts</code> and <code>class_weights</code></h3>
+<pre><code>counts = debug.class_counts(y, 4)                    <span class="out">tensor([111,  97,  91, 101])   the shapes are balanced</span>
+debug.class_weights(counts)                          <span class="out">tensor([0.901, 1.031, 1.099, 0.990])</span></code></pre>
+        <p>The notebook then builds a deliberately lopsided training set, 400 circles and 40 crosses, trains with and without weights, and prints per-class accuracy for both.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>record_activation</code></h3>
+        <p>Attach, run, remove. Check <code>model.features[0]</code> gives <span class="shape">(8, 16, 32, 32)</span>, <code>model.features[7]</code> gives <span class="shape">(8, 32, 8, 8)</span>, and <code>len(layer._forward_hooks) == 0</code> afterwards.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>GradCAM</code> and look at the heatmaps</h3>
+<pre><code>cam = debug.GradCAM(model, model.features[6])
+heat = cam(images[:8])                               <span class="out">torch.Size([8, 16, 16]), values in [0, 1]</span>
+big = F.interpolate(heat[:, None], size=32, mode="bilinear", align_corners=False)[:, 0]
+<span class="c"># overlay big on the images with alpha; the notebook has the plotting cell</span>
+cam.remove()</code></pre>
+        <p class="expect">Expected: the heat covers the shape and ignores the background. Then ask for the wrong class, <code>cam(images[:8], class_idx=(y[:8] + 1) % 4)</code>, and watch the map change.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>expected_calibration_error</code> and draw the reliability diagram</h3>
+<pre><code>probs = torch.softmax(logits, dim=1)
+debug.expected_calibration_error(probs, y)           <span class="out">0.077</span>
+conf, acc, count = debug.reliability_bins(probs, y)
+plt.bar(conf[count > 0], acc[count > 0], width=0.08); plt.plot([0, 1], [0, 1], "k--");</code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Do it all on dish photos</h3>
+        <p>The notebook rebuilds Lesson 9's frozen ResNet-18 on ten dish classes (a minute on the GPU), then runs the same four tools: the confident-mistakes gallery, class counts, Grad-CAM on <code>model.layer4</code> upsampled over the photos, and the reliability diagram. Expect to find at least one mislabelled image in the gallery, heatmaps that sometimes sit on the plate rather than the food, and an ECE noticeably higher than on the shapes.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: forget to remove a hook</h3>
+<pre><code>handles = [model.features[6].register_forward_hook(lambda m, i, o: stash.append(o)) for _ in range(50)]
+model(images)                                        <span class="c"># 50 copies of the activations kept alive, every forward pass</span>
+len(stash), torch.cuda.memory_allocated()            <span class="c"># grows with every call until the runtime dies</span>
+for h in handles: h.remove()</code></pre>
+        <p>Hooks are invisible in <code>print(model)</code> and in the forward code. When a notebook slows down or runs out of memory for no reason, <code>model.features[6]._forward_hooks</code> is the place to look.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_10.py -q
+<span class="out">7 passed in 0.9s</span>
+!pytest -m fast -q
+<span class="out">76 passed, … skipped, 1 deselected in 15.0s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 10: debugging and interpreting models"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l10-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: One of the differentiated Tensors appears to not have been used in the graph</dt>
+      <dd>The hooked layer did not run in this forward pass (wrong layer, or a model with branches), or you detached the activations in the hook. Grad-CAM needs them attached.</dd>
+
+      <dt>RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn</dt>
+      <dd>Every parameter is frozen and the input does not require grad either, so nothing is in the graph. <code>x.clone().requires_grad_(True)</code> before the forward pass.</dd>
+
+      <dt>The heatmap is all zeros for some images</dt>
+      <dd>Normal for an untrained or unsure model: the ReLU removes negative evidence and nothing positive was left. On a trained model, check you asked for a class the model considers plausible.</dd>
+
+      <dt>Memory climbs with every forward pass</dt>
+      <dd>A hook that appends to a list and was never removed. Hooks outlive the cell that created them; remove them in a <code>finally</code>.</dd>
+
+      <dt>ECE is exactly 0 but the model is clearly bad</dt>
+      <dd>You passed logits instead of softmax probabilities, so every "confidence" landed in the same overflow bin, or <code>n_bins</code> is 1. Softmax first; ten bins.</dd>
+
+      <dt>RuntimeError: weight tensor should be defined either for all 4 classes or no classes</dt>
+      <dd>The weight vector's length does not match the number of logits. <code>class_weights(class_counts(labels, n_classes))</code> with the right <code>n_classes</code>.</dd>
+    </dl>
+
+    <h2 id="l10-stretch">Stretch</h2>
+    <p>Implement temperature scaling: a single scalar <code>T</code>, fitted on the validation logits by minimising cross-entropy of <code>logits / T</code>, then applied before the softmax. Accuracy does not change; ECE should drop. Then run Grad-CAM for the top-2 classes of each misclassified dish photo side by side; when the two maps light up different parts of the plate, you have found the model's actual dilemma.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-09"><span class="dir">Previous</span><span class="title">Lesson 9: Transfer learning and evaluation</span></a>
+      <span class="next"><span class="dir">Next</span><span class="title">Lesson 11: Text as tensors (not published yet)</span></span>
+    </nav>
+  </main>
+</article>

@@ -1,0 +1,303 @@
+<!-- Lesson 07: Images and the first CNN. Section ids are prefixed l07-; rail links use #lesson-07/<section>. -->
+<article class="page" data-lesson="07" data-title="Images and the first CNN" id="lesson-07" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-07/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-07/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-07/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-07/images" data-section="images">Images are tensors</a></li>
+        <li><a href="#lesson-07/conv" data-section="conv">Convolution</a></li>
+        <li><a href="#lesson-07/pool" data-section="pool">Pooling and depth</a></li>
+        <li><a href="#lesson-07/cnn" data-section="cnn">The network</a></li>
+        <li><a href="#lesson-07/classify" data-section="classify">Classification</a></li>
+        <li><a href="#lesson-07/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-07/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-07/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-07/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">7</div>
+      <div>
+        <h1>Images and the first CNN</h1>
+        <p class="meta">Part 2, Vision. About 2.5 hours. GPU runtime recommended from here on. <b>You'll leave with</b> a network that looks at pictures, the shape arithmetic to design one, and your first classifier with its own loss.</p>
+      </div>
+    </div>
+
+    <section id="l07-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Describe an image batch as a <span class="shape">(<b class="dim-n">N</b>, <b class="dim-c">C</b>, <b class="dim-s">H</b>, <b class="dim-s">W</b>)</span> tensor and normalize it per channel.</li>
+        <li>Explain a convolution as a small set of weights slid over the image, and compute the output size from kernel, stride and padding.</li>
+        <li>Say what pooling, BatchNorm and stacking blocks each buy.</li>
+        <li>Build <code>SmallCNN</code> and reason about every shape from input to logits.</li>
+        <li>Train a classifier with <code>CrossEntropyLoss</code>, and read logits, probabilities, loss and accuracy correctly.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>nn.Conv2d</code></li><li><code>nn.MaxPool2d</code></li><li><code>nn.BatchNorm2d</code></li><li><code>nn.Flatten</code></li><li><code>nn.CrossEntropyLoss</code></li>
+        <li><code>F.log_softmax / torch.softmax</code></li><li><code>argmax(dim=1)</code></li><li><code>TensorDataset</code></li><li><code>torchvision.utils.make_grid</code></li><li><code>transforms.v2</code></li>
+      </ul>
+    </section>
+
+    <section id="l07-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l07-dod-tests" data-dod="tests">
+          <label for="l07-dod-tests">The Lesson 7 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_07.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l07-dod-fast" data-dod="fast">
+          <label for="l07-dod-fast">Everything so far still passes: <code>55 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l07-dod-quiz" data-dod-auto="quiz">
+          <label for="l07-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l07-dod-push" data-dod="push">
+          <label for="l07-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 7 is done. You have a network that sees; Lesson 8 makes it fast and Lesson 9 makes it good.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l07-project">Where we are</h2>
+    <p>Forkcast restaurants upload photos of their dishes, and the app needs to know what is in them: to check a listing, to search by picture, eventually to recommend. That is <em>image classification</em>, and it is where neural networks first became unavoidable. The data pipeline from Lesson 6 carries over unchanged; what changes is the shape of an item and the layers that read it. To keep the tests offline and fast, the repository draws its own pictures: coloured circles, squares, triangles and crosses. The notebook trains the same network on real dish photos.</p>
+
+    <h2 id="l07-images">Images are tensors with four dimensions</h2>
+    <p>A colour image is three grids of numbers, one per channel, red, green and blue, each <span class="shape dim-s">H</span> rows by <span class="shape dim-s">W</span> columns. PyTorch stores a batch as <span class="shape">(<b class="dim-n">N</b>, <b class="dim-c">C</b>, <b class="dim-s">H</b>, <b class="dim-s">W</b>)</span>: channels before height and width, which trips up everyone coming from image libraries that put channels last; Lesson 0's <code>permute</code> is the fix when you meet one. Pixel values arrive as integers 0 to 255 and are scaled to 0 to 1, then normalized per channel with the mean and standard deviation of the training set, the Normalizer idea with one mean per channel instead of one per column.</p>
+<pre><code>from forkcast import vision
+images, labels = vision.make_shapes(8, seed=0)
+images.shape, images.dtype                           <span class="out">(torch.Size([8, 3, 32, 32]), torch.float32)</span>
+labels                                               <span class="out">tensor([0, 3, 1, 0, 3, 3, 3, 3])   circle, cross, square, …</span>
+images.mean(dim=(0, 2, 3))                           <span class="out">tensor([0.087, 0.090, 0.095])   one mean per channel: mostly dark background</span>
+
+from torchvision.utils import make_grid
+plt.imshow(make_grid(images, nrow=8).permute(1, 2, 0))   <span class="c"># make_grid gives (3, H, W); imshow wants channels last</span></code></pre>
+
+    <h2 id="l07-conv">Convolution: a few weights, slid everywhere</h2>
+    <p>A fully connected layer on a 32×32 colour image would need 3072 weights per output, and it would have to learn separately that an edge in the top-left corner and the same edge in the bottom-right are the same thing. A <em>convolution</em> uses a small kernel of weights, 3×3 here, and slides it across the image, computing a weighted sum at every position. The same nine weights everywhere: far fewer parameters, and a pattern is detected wherever it appears. Each kernel produces one output grid, a <em>feature map</em>; a layer with 16 output channels has 16 kernels. Slide one.</p>
+
+    <div class="widget" data-widget="convSlide"></div>
+
+    <p>The output size follows from how many positions the kernel can occupy: <code>floor((size + 2·padding − kernel) / stride) + 1</code>. With a 3×3 kernel, <code>padding=1</code> keeps the size and <code>stride=2</code> halves it. You will compute this constantly, so it is the first exercise. In <code>nn.Conv2d(in_channels, out_channels, kernel_size)</code> the weight has shape <span class="shape">(<b class="dim-c">out</b>, <b class="dim-c">in</b>, k, k)</span>: every kernel looks at all input channels at once, so a kernel in the second layer sees all 16 feature maps of the first.</p>
+
+    <h2 id="l07-pool">Pooling, BatchNorm, and stacking blocks</h2>
+    <p>Between convolutions, <code>MaxPool2d(2)</code> keeps the largest value in each 2×2 patch, halving height and width. It has no weights; it makes the network indifferent to a shift of a pixel and lets the next layer's 3×3 kernels cover a wider region of the original image. Stack conv, pool, conv, pool, and the receptive field grows: the first layer sees edges, the second sees corners and strokes made of edges, a third would see parts of shapes.</p>
+
+    <div class="widget" data-widget="poolDemo"></div>
+
+    <p><code>BatchNorm2d</code> sits after each convolution and normalizes every channel's activations across the batch, then rescales them with two learned numbers per channel. It is the Normalizer idea applied <em>inside</em> the network, and it lets you train deeper networks with larger learning rates. Like dropout, it behaves differently in training (batch statistics) and evaluation (running averages), so the <code>model.train()</code>/<code>model.eval()</code> calls in the toolkit are now doing two jobs.</p>
+
+    <h2 id="l07-cnn">The network, shape by shape</h2>
+<pre><code>class SmallCNN(nn.Module):
+    def __init__(self, n_classes=4, size=32):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 16, kernel_size=3, padding=1), nn.BatchNorm2d(16), nn.ReLU(), nn.MaxPool2d(2),   <span class="c"># (N, 16, 16, 16)</span>
+            nn.Conv2d(16, 32, kernel_size=3, padding=1), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),  <span class="c"># (N, 32, 8, 8)</span>
+        )
+        self.head = nn.Sequential(
+            nn.Flatten(),                                        <span class="c"># (N, 32 * 8 * 8) = (N, 2048)</span>
+            nn.Linear(32 * (size // 4) ** 2, 64), nn.ReLU(),
+            nn.Linear(64, n_classes),                            <span class="c"># (N, 4) logits</span>
+        )
+    def forward(self, x):
+        return self.head(self.features(x))
+
+model = SmallCNN()
+model.features(images).shape                         <span class="out">torch.Size([8, 32, 8, 8])</span>
+model(images).shape                                  <span class="out">torch.Size([8, 4])</span>
+count_parameters(model)                              <span class="out">136580   of which 131136 are in the first Linear</span></code></pre>
+    <p>Read the parameter count: the convolutions hold about 5000 weights between them, the 2048-to-64 linear layer holds 131,136. That imbalance is why real networks keep pooling until the map is tiny, or average it down to one number per channel, before the classifier. It is also why <code>Flatten</code> must come after the last pool and nowhere else.</p>
+
+    <h2 id="l07-classify">Classification: logits, probabilities, loss</h2>
+    <p>Until now the model produced one number, minutes, and the loss was a squared distance. A classifier produces one number per class, the <em>logits</em>, which can be any real values. <code>softmax</code> turns them into probabilities that sum to one; the predicted class is the <code>argmax</code>. The loss is <em>cross-entropy</em>: minus the log of the probability the model gave the true class. Right and confident costs almost nothing; wrong and confident costs a lot, with no upper limit. <code>nn.CrossEntropyLoss</code> takes the raw logits and integer labels and does the softmax inside, more accurately than you would by hand, which is why the model's last layer has no activation.</p>
+
+    <div class="widget" data-widget="softmaxCE"></div>
+
+<pre><code>logits = model(images[:1])
+logits                                               <span class="out">tensor([[ 2.33,  0.39, -2.56, -2.25]])</span>
+torch.softmax(logits, dim=1)                         <span class="out">tensor([[0.861, 0.123, 0.006, 0.009]])   86% circle, and it is a circle</span>
+nn.CrossEntropyLoss()(logits, labels[:1])            <span class="out">tensor(0.150)                           -log(0.861)</span>
+vision.accuracy(model(images), labels)               <span class="out">1.0</span></code></pre>
+    <p>Accuracy is the fraction of correct <code>argmax</code> decisions. It is what you report; it is not what you train on, because it is flat almost everywhere: nudging a weight rarely flips a decision, so it has no useful gradient. Cross-entropy is the smooth stand-in whose gradient points toward higher accuracy. Keep both in view: loss for the optimizer, accuracy for you.</p>
+
+    <h2 id="l07-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="32" data-explain="(32 + 2 − 3) / 1 + 1 = 32. Padding 1 with a 3×3 kernel keeps the size." data-hint="floor((size + 2p − k) / s) + 1.">
+      <div class="quiz-row"><span class="q">1. A 32×32 input, <code>Conv2d(kernel_size=3, stride=1, padding=1)</code>. Output size?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="16" data-explain="floor((32 + 2 − 3) / 2) + 1 = floor(15.5) + 1 = 16. Stride 2 halves." data-hint="Same formula, stride 2, round down.">
+      <div class="quiz-row"><span class="q">2. Same input, <code>Conv2d(kernel_size=3, stride=2, padding=1)</code>. Output size?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="448" data-explain="Each of 16 kernels is 3 × 3 × 3 = 27 weights, so 432, plus 16 biases." data-hint="out × in × k × k, plus one bias per output channel.">
+      <div class="quiz-row"><span class="q">3. How many parameters does <code>nn.Conv2d(3, 16, kernel_size=3)</code> have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="8, 2048" data-explain="Flatten keeps the batch dimension and merges 32 × 8 × 8 = 2048, exactly Lesson 0's flatten(1)." data-hint="Lesson 0's flatten_images.">
+      <div class="quiz-row"><span class="q">4. What is the shape of <code>nn.Flatten()</code> applied to a (8, 32, 8, 8) tensor?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="(…)" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="0.69" data-explain="−log(0.5) = 0.693. Half-sure is a moderate loss; chance level for four classes is −log(0.25) = 1.386." data-hint="Cross-entropy is −log p of the true class.">
+      <div class="quiz-row"><span class="q">5. The model gives the true class probability 0.5. To two decimals, what is the cross-entropy loss for that image?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="8" data-explain="Two MaxPool2d(2) layers: 32 → 16 → 8. The head's first Linear therefore takes 32 × 8 × 8 inputs." data-hint="Each pool halves height and width.">
+      <div class="quiz-row"><span class="q">6. <code>SmallCNN</code> has two <code>MaxPool2d(2)</code> layers. What is the spatial size of its feature map for a 32×32 input?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l07-build">Build it</h2>
+    <p>One new file, <code>forkcast/vision.py</code>: the shape generator and loaders are provided; <code>conv_output_size</code>, <code>SmallCNN</code>, <code>accuracy</code> and <code>cross_entropy_by_hand</code> are yours. The toolkit from Lesson 6 trains it unchanged, with <code>loss_fn=nn.CrossEntropyLoss()</code>.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 7 notebook, pick a GPU runtime, run the setup cell</h3>
+        <p><em>Runtime</em>, <em>Change runtime type</em>, choose a GPU. The synthetic shapes train fine on a CPU; the dish photos at the end want the GPU.</p>
+        <p><a class="btn" data-colab="notebooks/lesson07.ipynb" href="#lesson-07/build">Open lesson07.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Look at the pictures</h3>
+<pre><code>images, labels = vision.make_shapes(16, seed=0)
+plt.figure(figsize=(10, 3)); plt.axis("off")
+plt.imshow(make_grid(images, nrow=8).permute(1, 2, 0))
+[vision.SHAPE_CLASSES[k] for k in labels]</code></pre>
+        <p class="expect">Expected: sixteen coloured shapes on dark backgrounds, their names matching the labels in reading order.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>conv_output_size</code> and check it against a real layer</h3>
+<pre><code>for size, k, s, p in [(32, 3, 1, 1), (32, 3, 2, 1), (32, 5, 1, 0), (64, 7, 2, 3)]:
+    real = nn.Conv2d(1, 1, k, stride=s, padding=p)(torch.zeros(1, 1, size, size)).shape[-1]
+    print(size, k, s, p, "->", vision.conv_output_size(size, k, s, p), real)
+<span class="out">32 3 1 1 -> 32 32
+32 3 2 1 -> 16 16
+32 5 1 0 -> 28 28
+64 7 2 3 -> 32 32</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Slide a kernel by hand</h3>
+        <p>The notebook builds the vertical-edge kernel from the widget as a <code>(1, 1, 3, 3)</code> weight, puts it into a <code>Conv2d(1, 1, 3, bias=False)</code>, and runs it over the red channel of a square. Compare the output with the widget's: bright where the colour changes left to right, nothing in the middle.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>SmallCNN</code></h3>
+        <p>Two blocks in <code>features</code>, three layers in <code>head</code>. Check the three shapes above: <span class="shape">(8, 32, 8, 8)</span> after <code>features</code>, <span class="shape">(8, 4)</span> after <code>head</code>, 136,580 parameters.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>accuracy</code> and <code>cross_entropy_by_hand</code></h3>
+<pre><code>logits = torch.tensor([[2.0, 0.1, 0.0, 0.0], [0.0, 3.0, 0.0, 0.0], [0.0, 0.0, 0.5, 0.4], [1.0, 0.0, 0.0, 0.0]])
+y = torch.tensor([0, 1, 2, 3])
+vision.accuracy(logits, y)                           <span class="out">0.75</span>
+vision.cross_entropy_by_hand(logits, y), nn.CrossEntropyLoss()(logits, y)   <span class="out">the same number</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Train on the shapes</h3>
+<pre><code>train_loader, val_loader = vision.shape_loaders(n_train=1000, n_val=400)
+torch.manual_seed(0)
+model = vision.SmallCNN()
+history = train.fit_loader(model, train_loader, val_loader, epochs=6, lr=1e-3, loss_fn=nn.CrossEntropyLoss())
+[round(v, 2) for v in history["val"]]               <span class="out">[1.33, 1.67, 0.89, 0.21, 0.07, 0.07]</span>
+vision.accuracy_loader(model, val_loader)            <span class="out">0.985</span></code></pre>
+        <p class="expect">Expected: validation loss dropping from about chance (1.39) to near zero in six epochs, and 98% of held-out shapes named correctly. The bump at epoch 2 is normal early in training; watch the trend, not one epoch.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose, twice</h3>
+<pre><code>model(images.permute(0, 2, 3, 1))                    <span class="c"># channels last, as image libraries store them</span>
+<span class="out">RuntimeError: Given groups=1, weight of size [16, 3, 3, 3], expected input[8, 32, 32, 3] to have 3 channels, but got 32 channels instead</span>
+
+torch.manual_seed(0)
+wrong = train.fit_loader(vision.SmallCNN(), train_loader, val_loader, epochs=6, lr=1e-3,
+                         loss_fn=lambda logits, y: nn.MSELoss()(logits[:, 0], y.float()))
+vision.accuracy_loader(wrong, val_loader)            <span class="out">around 0.25: it "trains", and learns nothing useful</span></code></pre>
+        <p>The first error is the channel order; the message tells you the layer saw 32 channels because it read the width as channels. The second does not error at all: regressing the class index as if it were a quantity treats "triangle" as halfway between "square" and "cross". Class labels are categories, and cross-entropy is their loss.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Real dish photos</h3>
+        <p>The notebook streams ten classes of Food-101 from the Hugging Face Hub, two thousand images resized to 64×64, and trains <code>SmallCNN(n_classes=10, size=64)</code> on them for a few minutes on the GPU. Expect accuracy well above the 10% of guessing and well below what you would want to ship: real photos are harder than coloured shapes, and 2000 of them is not many. Plot the loss curves and keep the number; Lesson 9 beats it by a wide margin with a pretrained backbone, and knowing the baseline is what makes that lesson land.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_07.py -q
+<span class="out">7 passed in 6.0s</span>
+!pytest -m fast -q
+<span class="out">55 passed, … skipped, 1 deselected in 14.1s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 7: images and the first CNN"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l07-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: Given groups=1, weight of size [16, 3, 3, 3], expected input[8, 32, 32, 3] to have 3 channels, but got 32 channels instead</dt>
+      <dd>Channels-last input. PyTorch wants <span class="shape">(<b class="dim-n">N</b>, <b class="dim-c">C</b>, <b class="dim-s">H</b>, <b class="dim-s">W</b>)</span>; use <code>permute(0, 3, 1, 2)</code> on the way in.</dd>
+
+      <dt>RuntimeError: mat1 and mat2 shapes cannot be multiplied (8x8192 and 2048x64)</dt>
+      <dd>The head's first Linear was sized for the wrong image size or the wrong number of pools. Recompute <code>32 × (size // 4)²</code>, or print <code>features(x).shape</code> and build the Linear from it.</dd>
+
+      <dt>RuntimeError: Expected floating point type for target with class probabilities, got Long</dt>
+      <dd>You passed one-hot or float targets where <code>CrossEntropyLoss</code> wanted class indices, or indices where it wanted probabilities. Give it integer labels of shape <span class="shape">(<b class="dim-n">N</b>,)</span>.</dd>
+
+      <dt>IndexError: Target 4 is out of bounds</dt>
+      <dd>A label equal to <code>n_classes</code>. Labels run from 0 to <code>n_classes − 1</code>; the model's last Linear needs as many outputs as there are classes.</dd>
+
+      <dt>Accuracy stuck at 0.25 (chance) while the loss falls</dt>
+      <dd>Usually a shuffled-labels bug: images and labels were permuted separately, or <code>shuffle=True</code> was applied to two loaders built from separate tensors. Keep them in one <code>TensorDataset</code>.</dd>
+
+      <dt>Validation accuracy swings wildly between epochs</dt>
+      <dd>BatchNorm in train mode during evaluation, or a tiny validation set. Make sure <code>evaluate_loader</code> calls <code>model.eval()</code>; the toolkit's does.</dd>
+    </dl>
+
+    <h2 id="l07-stretch">Stretch</h2>
+    <p>Visualise what the first layer learned: <code>model.features[0].weight</code> has shape <span class="shape">(16, 3, 3, 3)</span>; rescale each kernel to 0 to 1 and show the sixteen as a grid. Some will be edge detectors like the widget's. Then replace the 2048-to-64 Linear with <code>nn.AdaptiveAvgPool2d(1)</code> followed by <code>Linear(32, n_classes)</code>, retrain, and compare parameter count and accuracy: that swap is how every modern architecture ends.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-06"><span class="dir">Previous</span><span class="title">Lesson 6: Dataset, DataLoader and categorical embeddings</span></a>
+      <a class="next" href="#lesson-08"><span class="dir">Next</span><span class="title">Lesson 8: GPU training for real</span></a>
+    </nav>
+  </main>
+</article>

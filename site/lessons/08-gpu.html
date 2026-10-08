@@ -1,0 +1,311 @@
+<!-- Lesson 08: GPU training for real. Section ids are prefixed l08-; rail links use #lesson-08/<section>. -->
+<article class="page" data-lesson="08" data-title="GPU training for real" id="lesson-08" hidden>
+<aside class="rail">
+    <nav aria-label="Sections of this lesson">
+      <ul>
+        <li><a href="#lesson-08/objectives" data-section="objectives">Objectives</a></li>
+        <li><a href="#lesson-08/dod" data-section="dod">Definition of done</a></li>
+        <li><a href="#lesson-08/project" data-section="project">Where we are</a></li>
+        <li><a href="#lesson-08/device" data-section="device">The device</a></li>
+        <li><a href="#lesson-08/amp" data-section="amp">Mixed precision</a></li>
+        <li><a href="#lesson-08/augment" data-section="augment">Augmentation</a></li>
+        <li><a href="#lesson-08/checkpoint" data-section="checkpoint">Checkpoints</a></li>
+        <li><a href="#lesson-08/logging" data-section="logging">Logging and timing</a></li>
+        <li><a href="#lesson-08/questions" data-section="questions">Questions</a></li>
+        <li><a href="#lesson-08/build" data-section="build">Build it</a></li>
+        <li><a href="#lesson-08/errors" data-section="errors">Common errors</a></li>
+        <li><a href="#lesson-08/stretch" data-section="stretch">Stretch</a></li>
+      </ul>
+    </nav>
+    <div class="dod-rail">
+      <strong>Definition of done</strong>
+      <span class="count" data-dod-count>0/4</span>
+      <div class="muted" data-dod-status>Not started</div>
+    </div>
+  </aside>
+
+<main class="prose">
+    <div class="lesson-head">
+      <div class="num" aria-hidden="true">8</div>
+      <div>
+        <h1>GPU training for real</h1>
+        <p class="meta">Part 2, Vision. About 2.5 hours. GPU runtime. <b>You'll leave with</b> training loop v2: device-agnostic, half precision where it is safe, augmented, checkpointed after every epoch, resumable, timed and logged. It is the loop every remaining lesson trains with.</p>
+      </div>
+    </div>
+
+    <section id="l08-objectives" class="panel objectives">
+      <h2>Objectives</h2>
+      <p>By the end of this lesson you can:</p>
+      <ol>
+        <li>Write device-agnostic code and say what <code>.to(device)</code> does to a tensor and to a module.</li>
+        <li>Use <code>torch.autocast</code> for mixed precision, explain what float16 and bfloat16 lose, and say when a <code>GradScaler</code> is needed.</li>
+        <li>Add data augmentation and explain why it is regularization.</li>
+        <li>Save a full checkpoint after every epoch and resume from it with an identical run.</li>
+        <li>Time an epoch, log to TensorBoard, and know the one synchronization point in the loop.</li>
+      </ol>
+      <p class="muted" style="margin:1rem 0 0">PyTorch introduced in this lesson</p>
+      <ul class="chips">
+        <li><code>torch.cuda.is_available / get_device_name / memory_allocated</code></li><li><code>.to(device)</code></li><li><code>non_blocking / pin_memory</code></li><li><code>torch.autocast</code></li>
+        <li><code>torch.amp.GradScaler</code></li><li><code>optimizer.state_dict()</code></li><li><code>torch.save(dict) / map_location</code></li><li><code>zero_grad(set_to_none=True)</code></li>
+        <li><code>SummaryWriter</code></li><li><code>transforms.v2.RandomResizedCrop / RandomHorizontalFlip / ColorJitter</code></li><li><code>torch.compile</code></li>
+      </ul>
+    </section>
+
+    <section id="l08-dod" class="panel dod" data-dod-panel>
+      <h2>Definition of done</h2>
+      <ul>
+        <li>
+          <input type="checkbox" id="l08-dod-tests" data-dod="tests">
+          <label for="l08-dod-tests">The Lesson 8 tests pass: <code>7 passed</code>.
+            <pre><code><span class="cmd">pytest tests/test_08.py -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l08-dod-fast" data-dod="fast">
+          <label for="l08-dod-fast">Everything so far still passes: <code>62 passed</code> and no failures. Skipped tests are the GPU check plus one file per lesson you have not started yet.
+            <pre><code><span class="cmd">pytest -m fast -q</span></code></pre>
+          </label>
+        </li>
+        <li>
+          <input type="checkbox" id="l08-dod-quiz" data-dod-auto="quiz">
+          <label for="l08-dod-quiz">All six questions on this page answered correctly. <span class="auto">Tracked automatically on this page.</span></label>
+        </li>
+        <li>
+          <input type="checkbox" id="l08-dod-push" data-dod="push">
+          <label for="l08-dod-push">Pushed, and the <em>DoD checks</em> workflow is green.</label>
+        </li>
+      </ul>
+      <div class="dod-done">Lesson 8 is done. The loop is finished; from here on you change models and data, never the loop.</div>
+      <p class="muted" style="margin:0.9rem 0 0;font-size:0.9rem"><button type="button" class="reveal" data-dod-reset>Clear this lesson's progress</button></p>
+    </section>
+
+    <h2 id="l08-project">Where we are</h2>
+    <p>The dish photos at the end of Lesson 7 took minutes on a GPU and would have taken an hour on the CPU, and the real Food-101 run in Lesson 9 is twenty times bigger. Training at that scale raises problems that had no reason to exist on four features: where the data lives, how precise the arithmetic needs to be, what happens when a Colab runtime disconnects at epoch 7 of 10, and how you know what the run is doing while you wait. This lesson solves each one once, inside the toolkit, so that the lessons after it only have to think about models.</p>
+
+    <h2 id="l08-device">The device: one variable, two kinds of move</h2>
+    <p>A GPU is a separate computer with its own memory. Tensors live on one device or the other, and every operation needs all its inputs on the same one. The pattern is a single <code>device</code> variable chosen once, the model moved to it once, and every batch moved to it as it arrives. Two things differ. <code>x.to(device)</code> <em>returns a copy</em>: the original tensor stays where it was, so you write <code>x = x.to(device)</code>. <code>model.to(device)</code> moves the module <em>in place</em>: its parameters change device, and the call also returns the module for convenience. Follow one training step across the two devices.</p>
+
+    <div class="widget" data-widget="deviceFlow"></div>
+
+<pre><code>device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   <span class="c"># forkcast.env.pick_device() since Lesson 0</span>
+torch.cuda.get_device_name(0)                        <span class="out">'Tesla T4'   or whatever Colab hands you</span>
+model = TabularNet(4).to(device)                     <span class="c"># parameters now on the GPU</span>
+for batch in loader:
+    *inputs, target = batch
+    inputs = [x.to(device, non_blocking=True) for x in inputs]   <span class="c"># copies; the CPU tensors are untouched</span>
+    target = target.to(device, non_blocking=True)
+    ...
+    total += loss.item() * len(target)                <span class="c"># .item(): the one moment the CPU waits for the GPU</span></code></pre>
+    <p>Everything the toolkit does on the GPU is asynchronous: the CPU queues work and moves on. <code>loss.item()</code> is the exception, because a Python float needs the actual number, so the CPU waits there. Once per batch that is fine. Printing or <code>.item()</code>-ing inside the model's forward pass would make the GPU idle between every layer. <code>torch.cuda.memory_allocated()</code> tells you how much of the card you are using; running out of it is the most common GPU error, and a smaller <code>batch_size</code> is the usual fix.</p>
+
+    <h2 id="l08-amp">Mixed precision: half the bytes, most of the speed</h2>
+    <p>Parameters and activations have been float32 since Lesson 0: 32 bits per number. Modern GPUs multiply 16-bit numbers several times faster and move half as many bytes doing it. The catch is what 16 bits can hold. Look at what each format does to the kinds of numbers a training run produces.</p>
+
+    <div class="widget" data-widget="precisionDemo"></div>
+
+    <p><em>Mixed</em> precision means the parameters stay float32 and only the forward computations that are safe run in 16 bits. <code>torch.autocast</code> decides which ops those are, op by op, and casts on the way in; you wrap the forward pass in it and compute the loss outside, in float32. On a GPU the 16-bit type is float16, whose small range loses tiny gradients, so a <code>GradScaler</code> multiplies the loss by a large factor before <code>backward()</code>, divides the gradients back before the step, and skips the step when something overflowed. On a CPU autocast uses bfloat16, which has float32's range, and no scaler is needed; that is how the tests exercise this path without a GPU. The toolkit's <code>make_scaler</code> returns a scaler only where it helps.</p>
+<pre><code>with torch.autocast(device_type=device.type, dtype=autocast_dtype(device), enabled=amp):
+    output = model(*inputs)                           <span class="c"># bfloat16 on CPU, float16 on CUDA</span>
+loss = loss_fn(output.float(), target)                <span class="c"># float32</span>
+if scaler is not None:
+    scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
+else:
+    loss.backward(); optimizer.step()
+
+output.dtype                                          <span class="out">torch.bfloat16   on a CPU</span>
+fit_v2(model, train_loader, val_loader, epochs=3, lr=3e-3, amp=True)["train"]   <span class="out">[292.67, 284.40, 280.76]   float32 gave [292.68, 284.40, 280.76]</span></code></pre>
+
+    <h2 id="l08-augment">Augmentation: regularization made from data</h2>
+    <p>A flipped photo of a dish is still a photo of that dish. So is one framed a little differently, or taken under warmer light. Applying such a random change every time an image is fetched means the network never sees the same tensor twice: it cannot memorise pixels, so it has to learn what makes a dish a dish. That is regularization, like dropout, but made from knowledge about the data: which changes keep the label true. It lives in the dataset's <code>__getitem__</code>, not in the model, and it is never applied to validation or test images.</p>
+
+    <div class="widget" data-widget="augmentPreview"></div>
+
+<pre><code>from torchvision.transforms import v2
+train_transform = v2.Compose([v2.RandomHorizontalFlip(), v2.RandomResizedCrop(32, scale=(0.7, 1.0), antialias=True),
+                              v2.ColorJitter(brightness=0.2, contrast=0.2)])
+
+class AugmentedTensorDataset(Dataset):
+    def __getitem__(self, i):
+        x = self.images[i]
+        if self.transform is not None:
+            x = self.transform(x)                     <span class="c"># a fresh random view on every fetch</span>
+        return x, self.labels[i]
+
+<span class="out">200 training shapes, 15 epochs:   plain accuracy 0.865     augmented accuracy 0.940
+1000 training shapes, 6 epochs:   plain accuracy 0.925     augmented accuracy 0.990</span></code></pre>
+    <p>The gain is largest when data is scarce, which is exactly when you need it. The cost is CPU time per batch (0.45 s against 0.68 s per epoch here), which is what <code>DataLoader</code>'s <code>num_workers</code> is for: the augmentation runs in worker processes while the GPU trains on the previous batch.</p>
+
+    <h2 id="l08-checkpoint">Checkpoints: a run you can resume</h2>
+    <p>Lesson 3 saved a <code>state_dict</code>: the weights. That reloads a trained model; it does not let you <em>continue training</em>, because the optimizer has state too. Adam keeps running averages of every parameter's gradients, and a fresh Adam takes its first steps far too boldly. A checkpoint that resumes cleanly holds the model, the optimizer, the epoch number, the history so far and the best validation loss, all in one dictionary. Write it after every epoch; it costs a fraction of a second.</p>
+
+    <div class="widget" data-widget="checkpointTimeline"></div>
+
+<pre><code>torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch,
+            "history": history, "best_val": best_val}, "ckpt.pt")           <span class="c"># 65 kB for TabularNet</span>
+
+ckpt = torch.load("ckpt.pt", map_location=device, weights_only=True)      <span class="c"># map_location: a GPU checkpoint opens on a CPU</span>
+model.load_state_dict(ckpt["model"]); optimizer.load_state_dict(ckpt["optimizer"])
+start = ckpt["epoch"] + 1
+
+fit_v2(..., epochs=5, ckpt_path="full.pt")["train"]                         <span class="out">[292.68, 284.40, 280.76, 269.06, 259.47]</span>
+fit_v2(..., epochs=3, ckpt_path="r.pt"); fit_v2(..., epochs=5, ckpt_path="r.pt", resume=True)["train"]
+                                                                             <span class="out">[292.68, 284.40, 280.76, 269.06, 259.47]   identical</span>
+<span class="c"># the same resume with only the weights restored:</span>                      <span class="out">[292.68, 284.40, 280.76, 269.23, 260.49]   a different run</span></code></pre>
+    <p>One more thing makes the resumed run identical rather than merely similar: <code>fit_v2</code> seeds the random number generator with <code>seed + epoch</code> at the top of every epoch, so epoch 4's shuffle is the same whether or not the process restarted in between. Reproducibility is a design choice, and it is cheap when you make it early.</p>
+
+    <h2 id="l08-logging">Logging, timing, and the free speedup</h2>
+    <p>A history list is enough for a notebook; a run that takes an hour wants a live chart. <code>SummaryWriter</code> writes scalars to a directory that TensorBoard renders while training continues, and Colab can embed it with <code>%tensorboard --logdir runs</code>. <code>fit_v2</code> also records seconds per epoch, which is the number to look at before anything else when a run feels slow: if the GPU is idle, the data loading is the problem, not the model. Finally, <code>torch.compile(model)</code> fuses the model's operations into faster kernels; it costs a slow first epoch and often buys back a third of the time after, which is worth it for long runs and not for short ones.</p>
+
+    <h2 id="l08-questions">Questions</h2>
+    <p><span class="quiz-progress" data-quiz-progress></span></p>
+
+    <div class="quiz" data-quiz="q1" data-answer="38.5" data-explain="64 × 3 × 224 × 224 numbers, four bytes each: 38,535,168 bytes. GPU memory fills up fast; activations of every layer add to this." data-hint="count the numbers, multiply by 4 bytes, divide by a million.">
+      <div class="quiz-row"><span class="q">1. A batch of 64 colour images, 224×224, in float32. To one decimal, how many MB is the batch?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 1"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q2" data-answer="65504" data-explain="Five exponent bits reach 2¹⁶; the largest representable value is 65504, and 65520 or more rounds to infinity. A loss that large overflows, which is one reason the loss is kept in float32." data-hint="It is in the precision table above.">
+      <div class="quiz-row"><span class="q">2. What is the largest finite number float16 can hold?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 2"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q3" data-answer="7" data-explain="The checkpoint records the last finished epoch, 6; training resumes at epoch 6 + 1." data-hint="start = ckpt['epoch'] + 1.">
+      <div class="quiz-row"><span class="q">3. A checkpoint is saved after every epoch. The runtime dies during epoch 7. At which epoch does the resumed run start?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 3"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q4" data-answer="5" data-explain="model, optimizer, epoch, history, best_val. Weights alone cannot resume a run." data-hint="Count the keys in the dictionary the toolkit saves.">
+      <div class="quiz-row"><span class="q">4. How many entries does the toolkit's checkpoint dictionary have?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 4"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q5" data-answer="30" data-explain="60 / 2. The number worth knowing before you decide whether to wait for a free CPU runtime." data-hint="Divide.">
+      <div class="quiz-row"><span class="q">5. An epoch takes 60 seconds on the CPU runtime and 2 seconds on the GPU. What is the speedup?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 5"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz="q6" data-answer="0" data-explain="On a CPU autocast uses bfloat16, which has float32's range, so make_scaler returns None and the loss is never scaled." data-hint="Does bfloat16 underflow small gradients?">
+      <div class="quiz-row"><span class="q">6. <code>fit_v2(..., amp=True, device="cpu")</code>. How many times per epoch is the loss multiplied by a GradScaler factor?</span></div>
+      <div class="quiz-row"><input type="text" placeholder="a number" aria-label="your answer for question 6"><button class="btn small" type="button" data-check>Check</button></div>
+      <p class="quiz-feedback" aria-live="polite"></p>
+    </div>
+
+    <h2 id="l08-build">Build it</h2>
+    <p><code>forkcast/train.py</code> gains <code>make_scaler</code>, <code>train_one_epoch_amp</code>, <code>save_checkpoint</code>, <code>load_checkpoint</code> and <code>fit_v2</code>; <code>forkcast/vision.py</code> gains <code>AugmentedTensorDataset</code> (the transform itself is provided). The tests run on the CPU through the bfloat16 path; the notebook runs the same code on the GPU.</p>
+
+    <ol class="steps">
+      <li><div>
+        <h3>Open the Lesson 8 notebook on a GPU runtime and run the setup cell</h3>
+        <p><a class="btn" data-colab="notebooks/lesson08.ipynb" href="#lesson-08/build">Open lesson08.ipynb in Colab</a></p>
+      </div></li>
+
+      <li><div>
+        <h3>Meet the device</h3>
+<pre><code>device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.cuda.get_device_name(0), torch.cuda.memory_allocated() / 1e6     <span class="out">('Tesla T4', 0.0)</span>
+x = torch.randn(1000, 1000)
+y = x.to(device)
+x.device, y.device                                   <span class="out">(device(type='cpu'), device(type='cuda', index=0))   a copy</span>
+model = TabularNet(4).to(device)
+next(model.parameters()).device                      <span class="out">device(type='cuda', index=0)   moved in place</span>
+try: model(x_cont_cpu, x_cat_cpu)
+except RuntimeError as err: print(err)               <span class="out">Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Time a CPU epoch against a GPU epoch</h3>
+        <p>The notebook trains <code>SmallCNN</code> on the shapes for one epoch on each device with <code>fit_v2</code> and prints <code>history["epoch_seconds"]</code>. Write the two numbers down; the ratio is your answer to question 5 for this machine.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>make_scaler</code> and <code>train_one_epoch_amp</code></h3>
+        <p>The autocast block, the float32 loss, the two branches with and without a scaler. Check on the CPU that <code>amp=True</code> runs and the output dtype inside autocast is <code>bfloat16</code>; on the GPU, that <code>make_scaler(device, True)</code> returns a scaler and an epoch is faster than in float32.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>AugmentedTensorDataset</code> and compare</h3>
+<pre><code>aug = vision.AugmentedTensorDataset(images, labels, vision.train_transform(32))
+torch.equal(aug[0][0], aug[0][0])                    <span class="out">False   two fetches, two views</span>
+plt.imshow(make_grid(torch.stack([aug[0][0] for _ in range(8)]), nrow=8).permute(1, 2, 0))</code></pre>
+        <p>Then train twice on 200 shapes for 15 epochs, plain and augmented, and compare validation accuracy: 0.865 against 0.940 in the sandbox.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>save_checkpoint</code> and <code>load_checkpoint</code></h3>
+        <p>Five keys in, five keys out. Check that a reloaded model predicts identically and that the reloaded optimizer's <code>state_dict()["state"]</code> has the same keys as the original.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Write <code>fit_v2</code> and prove resume is exact</h3>
+<pre><code>full = train.fit_v2(fresh(), train_loader, val_loader, epochs=5, lr=3e-3, ckpt_path="full.pt")
+train.fit_v2(fresh(), train_loader, val_loader, epochs=3, lr=3e-3, ckpt_path="r.pt")      <span class="c"># "crash" after epoch 2</span>
+resumed = train.fit_v2(fresh(), train_loader, val_loader, epochs=5, lr=3e-3, ckpt_path="r.pt", resume=True)
+full["train"] == resumed["train"]                   <span class="out">True, to the last digit</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Break it on purpose: resume with the weights only</h3>
+        <p>The notebook overwrites the checkpoint's <code>"optimizer"</code> entry with a fresh Adam's state and resumes. The curve recovers within a few epochs, but epochs 3 and 4 differ: <code>269.23</code> and <code>260.49</code> against <code>269.06</code> and <code>259.47</code>. A resumed run that is "close enough" is a run you can no longer compare with anything.</p>
+      </div></li>
+
+      <li><div>
+        <h3>Log to TensorBoard and watch a run</h3>
+<pre><code>%load_ext tensorboard
+%tensorboard --logdir runs
+train.fit_v2(model, train_loader, val_loader, epochs=20, lr=3e-3, device=device, amp=True, log_dir="runs/tabular")</code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Run the definition-of-done tests, then everything so far</h3>
+<pre><code>!pytest tests/test_08.py -q
+<span class="out">7 passed in 2.6s</span>
+!pytest -m fast -q
+<span class="out">62 passed, … skipped, 1 deselected in 14.0s      skipped = the GPU test + lessons not started yet</span></code></pre>
+      </div></li>
+
+      <li><div>
+        <h3>Commit and push</h3>
+<pre><code>!git add -A
+!git commit -m <span class="s">"Lesson 8: training loop v2"</span>
+!git push https://{TOKEN}@github.com/{GITHUB_USER}/{REPO}.git HEAD:main</code></pre>
+      </div></li>
+    </ol>
+
+    <h2 id="l08-errors">Common errors</h2>
+    <dl class="errors">
+      <dt>RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!</dt>
+      <dd>The model was moved and the batch was not, or the other way round. Remember <code>x = x.to(device)</code> for tensors; the toolkit's <code>_split_batch</code> does it for every element.</dd>
+
+      <dt>torch.OutOfMemoryError: CUDA out of memory. Tried to allocate …</dt>
+      <dd>Halve <code>batch_size</code>. If it persists, turn on <code>amp</code>, or check for tensors kept alive by accident (a list of losses that are tensors rather than <code>.item()</code> floats is the classic).</dd>
+
+      <dt>Loss is nan with amp=True on the GPU but fine without</dt>
+      <dd>Float16 overflow in the forward pass, usually in a loss computed inside autocast. Compute the loss on <code>output.float()</code> outside the autocast block, and make sure the scaler is in use.</dd>
+
+      <dt>RuntimeError: Attempting to deserialize object on a CUDA device but torch.cuda.is_available() is False</dt>
+      <dd>A checkpoint written on a GPU, opened on a CPU, without <code>map_location</code>. Pass <code>map_location=device</code>.</dd>
+
+      <dt>Resumed run differs from the uninterrupted one</dt>
+      <dd>Optimizer state not restored, or the shuffle not seeded per epoch, or <code>resume=True</code> given without a <code>ckpt_path</code> that exists. All three are silent.</dd>
+
+      <dt>Validation accuracy is lower than training accuracy by a lot, and only with augmentation on</dt>
+      <dd>The augmentation was applied to the validation set too, or the transform is too aggressive (a 0.3 crop of a dish is a tablecloth). Validate on untouched images; tune the crop scale.</dd>
+
+      <dt>GPU utilisation near zero while training</dt>
+      <dd>The data loader is the bottleneck. Add <code>num_workers</code>, <code>pin_memory=True</code>, and move augmentation off the main process. <code>epoch_seconds</code> will show the difference.</dd>
+    </dl>
+
+    <h2 id="l08-stretch">Stretch</h2>
+    <p>Wrap the model with <code>torch.compile(model)</code> before <code>fit_v2</code> on the GPU and compare <code>epoch_seconds</code>: the first epoch is slower, the rest faster. Then add <code>num_workers=2</code> and <code>pin_memory=True</code> to the augmented loader and measure again. Finally, make <code>fit_v2</code> save a second file, <code>best.pt</code>, whenever the validation loss improves; <code>ckpt.pt</code> is for resuming, <code>best.pt</code> is for shipping, and Lesson 15 wants the latter.</p>
+
+    <nav class="lesson-nav" aria-label="Lesson navigation">
+      <a href="#lesson-07"><span class="dir">Previous</span><span class="title">Lesson 7: Images and the first CNN</span></a>
+      <a class="next" href="#lesson-09"><span class="dir">Next</span><span class="title">Lesson 9: Transfer learning and evaluation</span></a>
+    </nav>
+  </main>
+</article>

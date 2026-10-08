@@ -1,0 +1,25 @@
+# Course maintainers' checks: the reference solutions pass, and the site has no
+# broken local links. This is the badge shown in the README.
+name: Reference solutions
+
+on: [push, pull_request]
+
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU-only PyTorch
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the package and test tools
+        run: pip install -e ".[dev]"
+      - name: Apply every reference solution and run the fast tests
+        run: make reference
+      - name: Rebuild the course page and fail if the committed build is stale
+        run: make site && git diff --exit-code -- docs/index.html
+      - name: Check the course page for broken internal links
+        run: make site-check
